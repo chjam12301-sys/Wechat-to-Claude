@@ -29,6 +29,12 @@ const HELP_OVERVIEW = `📋 Wechat-to-Claude 命令
   /session switch <label>      切换到指定会话
   /session pickup              接入电脑终端最近的会话
 
+【定时任务】
+  /schedule list               列出所有定时任务
+  /schedule add <cron> | <prompt>   新建任务
+  /schedule remove <id>        删除任务
+  /schedule show <id>          查看详情
+
 【配置】
   /cwd [路径]      工作目录
   /model [名称]    切换 Claude 模型
@@ -57,6 +63,7 @@ const HELP_DETAILS: Record<string, string> = {
   history: '/history [N]\n\n显示最近 N 条对话（默认 20，最多 100）。\n例: /history 50',
   undo: '/undo [N]\n\n撤销最近 N 条对话（默 1）。只删本地聊天历史，不影响 SDK 会话本身。',
   session: '/session <子命令>\n\n  list                列出所有保存的会话（按最近活跃排序）\n  new <label> [cwd]   新建会话；cwd 省略则继承当前会话\n  switch <label>      切换到指定会话\n  pickup              接入桌面端 Claude CLI 最近的 jsonl 会话',
+  schedule: '/schedule <子命令>\n\n  list                          列出所有定时任务\n  add <cron> | <prompt>         新建任务（cwd 用当前会话）\n  remove <id>                   删除任务\n  show <id>                     查看任务详情\n\ncron 表达式：\n  every 30m / every 2h / every 1d\n  daily 09:00\n  weekly mon 09:00\n  monthly 15 14:00 (1-28)\n\n例: /schedule add daily 09:00 | 总结今日 git log',
   cwd: '/cwd [路径]\n\n无参数显示当前工作目录；带路径切换。\n例: /cwd ~/Code/myproj',
   model: '/model [名称]\n\n无参数显示当前模型；带名称切换。\n例: /model claude-sonnet-4-5',
   permission: '/permission [模式]\n\n  default      每次工具使用需手动审批（推荐）\n  acceptEdits  自动批准文件编辑，其他需审批\n  plan         只读模式，不允许任何工具\n  auto         自动批准所有工具（危险，慎用）',

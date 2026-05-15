@@ -3,6 +3,7 @@ import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
 import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleTokens, handleHealth, handleUnknown } from './handlers.js';
 import { handleSession } from './session.js';
+import { handleSchedule } from './schedule.js';
 
 export interface CommandContext {
   accountId: string;
@@ -82,6 +83,9 @@ export function routeCommand(ctx: CommandContext): CommandResult {
       return handleCompact(ctx);
     case 'session':
       return handleSession(ctx, args);
+    case 'schedule':
+    case 'sched':
+      return handleSchedule(ctx, args);
     case 'version':
     case 'v':
       return handleVersion();

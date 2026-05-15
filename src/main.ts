@@ -26,6 +26,7 @@ import {
   formatDuration as fmtDuration,
 } from './health.js';
 import { archiveOutput, formatArchiveAnnouncement } from './output-archiver.js';
+import { startScheduler, type ScheduledTask, type TaskRunResult } from './schedule.js';
 import { DATA_DIR } from './constants.js';
 import { MessageType, type WeixinMessage, type MessageItem } from './wechat/types.js';
 
@@ -346,6 +347,14 @@ async function runDaemon(): Promise<void> {
     getContextToken: () => sharedCtx.lastContextToken,
   });
 
+  // -- Start scheduler (background tasks defined via /schedule) --
+  // Each due task fires its own claudeQuery (no shared session) and pushes
+  // a result preview to WeChat via notify(). Daemon-internal — cron lives
+  // and dies with the daemon (which launchd/systemd keeps alive).
+  const stopScheduler = startScheduler({
+    runTask: (task) => runScheduledTask(task, config),
+  });
+
   // Surface uncaught errors to WeChat so silent crashes don't leave you
   // wondering "why isn't it responding?". Process still exits — launchd /
   // systemd will respawn us.
@@ -367,6 +376,7 @@ async function runDaemon(): Promise<void> {
   function shutdown(): void {
     logger.info('Shutting down...');
     void notify('info', 'Daemon 收到 shutdown 信号，正在退出。');
+    stopScheduler();
     monitor.stop();
     setNotifyContext(null);
     setTimeout(() => process.exit(0), 200);
@@ -1005,6 +1015,100 @@ async function sendToClaude(
     if (activeControllers.get(account.accountId) === abortController) {
       activeControllers.delete(account.accountId);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled task execution
+// ---------------------------------------------------------------------------
+// Called by the scheduler tick loop when a task is due. Fires a fresh
+// claudeQuery (no session reuse — these are background jobs, isolated from
+// the user's interactive conversation) then pushes a result preview to
+// WeChat via the daemon-level notify() channel.
+//
+// Failure modes are all caught and surfaced through TaskRunResult — the
+// scheduler relies on this never throwing, so updateTaskAfterRun gets to
+// record a failure entry instead of losing the run.
+async function runScheduledTask(
+  task: ScheduledTask,
+  config: ReturnType<typeof loadConfig>,
+): Promise<TaskRunResult> {
+  const startTs = Date.now();
+  void notify('info', `🗓 定时任务启动 [${task.id}]\n${task.prompt.slice(0, 100)}${task.prompt.length > 100 ? '...' : ''}`);
+
+  try {
+    const result = await claudeQuery({
+      prompt: task.prompt,
+      cwd: task.cwd.replace(/^~/, process.env.HOME || ''),
+      model: config.model,
+      systemPrompt: config.systemPrompt,
+      permissionMode: 'bypassPermissions', // background tasks must run unattended
+      abortController: new AbortController(),
+    });
+
+    const durationMs = Date.now() - startTs;
+    if (result.error && !result.text) {
+      void notify('error', `🗓 任务 [${task.id}] 失败 (耗时 ${(durationMs / 1000).toFixed(1)}s)\n\n${result.error}`);
+      return {
+        ts: Date.now(),
+        success: false,
+        error: result.error,
+        durationMs,
+      };
+    }
+
+    const fullText = result.text || '(无文本输出)';
+    const PREVIEW_LIMIT = 1500;
+    const preview = fullText.length > PREVIEW_LIMIT
+      ? fullText.slice(0, PREVIEW_LIMIT) + '\n\n…(以下省略)…'
+      : fullText;
+
+    // Compose the WeChat push: header + preview + (if archived) file path
+    const headerLines = [
+      `🗓 任务 [${task.id}] 完成 (耗时 ${(durationMs / 1000).toFixed(1)}s)`,
+      `Cron: ${task.cron}`,
+      '',
+    ];
+    let body = headerLines.join('\n') + preview;
+
+    if (fullText.length > PREVIEW_LIMIT) {
+      const archive = archiveOutput(fullText, {
+        model: result.usage?.model,
+        cwd: task.cwd,
+        promptExcerpt: task.prompt.slice(0, 200),
+        usage: result.usage
+          ? {
+              input: result.usage.input,
+              output: result.usage.output,
+              cache_creation: result.usage.cache_creation,
+              cache_read: result.usage.cache_read,
+            }
+          : undefined,
+        durationMs,
+      });
+      if (archive) {
+        body += `\n\n📄 完整 ${fullText.length.toLocaleString('zh-CN')} 字 → ${archive.absolutePath}`;
+      }
+    }
+
+    void notify('info', body);
+    return {
+      ts: Date.now(),
+      success: true,
+      outputPreview: preview,
+      durationMs,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const durationMs = Date.now() - startTs;
+    logger.error('Scheduled task failed', { id: task.id, error: msg });
+    void notify('error', `🗓 任务 [${task.id}] 抛错 (耗时 ${(durationMs / 1000).toFixed(1)}s)\n\n${msg}`);
+    return {
+      ts: Date.now(),
+      success: false,
+      error: msg,
+      durationMs,
+    };
   }
 }
 
