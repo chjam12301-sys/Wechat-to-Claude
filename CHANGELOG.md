@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`/help` grouping + per-command detail** — `/help` with no args shows
+  commands grouped by purpose (会话 / 多会话 / 配置 / 用量·系统 / Skill /
+  定时任务). `/help <cmd>` shows usage + behavior for that one command.
+  (`src/commands/handlers.ts`)
+- **`/tokens` CNY cost estimate** — cost line now shows both `$X USD`
+  and `≈¥Y` using a hardcoded mid-market rate of 7.2. Override the
+  constant in `usage-tracker.ts` if it drifts. (`src/usage-tracker.ts`)
+- **`/health` command** — daemon uptime, query stats (success / fail /
+  abort counts), and the 5 most recent errors with timestamps. All
+  in-memory; resets on daemon restart. (`src/health.ts` new,
+  `src/commands/handlers.ts`)
+- **Daemon-level proactive notifications** — new `src/notification.ts`
+  provides a process-global `notify(severity, message)` channel for
+  out-of-band events (query failures, scheduled task results, daemon
+  lifecycle). `process.on('uncaughtException')` and `unhandledRejection`
+  push to WeChat before/instead of silent crash. Long queries (≥ 30s)
+  get a `✅ 完成 (耗时 X)` trailer.
+- **Long-output archiving** — replies > 5000 chars are written to
+  `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md` with a metadata
+  header (timestamp / model / cwd / token usage / prompt excerpt).
+  WeChat receives a 1500-char preview + the file path. Atomic write
+  (.tmp → rename); never throws. Pair the directory with iCloud Drive /
+  OneDrive / Syncthing for phone access. (`src/output-archiver.ts` new)
+- **`/schedule` — background scheduled tasks** — daemon-internal
+  cron-lite. Simplified expression dialect (`every 30m`, `daily 09:00`,
+  `weekly mon 09:00`, `monthly 15 14:00`). Each due task fires fresh
+  `claudeQuery` with `bypassPermissions` (background jobs can't wait
+  for human approval) and pushes results via `notify()`. Persisted in
+  `<DATA_DIR>/schedules.json`; no thundering-herd backfill on restart;
+  failures are recorded but not retried. Commands: `list / add /
+  remove / show`. (`src/schedule.ts` new, `src/commands/schedule.ts`
+  new)
+
+### Changed
+
+- `SEND_INTERVAL_MS` default of 36s now documented in inline comment as
+  tunable per WeChat rate-limit tolerance.
+
 ## [1.0.0] — 2026-05-15
 
 Initial open-source release. Hardened fork of

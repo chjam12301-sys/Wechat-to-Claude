@@ -98,6 +98,48 @@ npm run daemon -- start
 
 ---
 
+## 后续生产力增强
+
+在以上 5 个 hardening 之上，最近几次 commit 进一步把这个工具从"能用"推向"装在口袋里"：
+
+### 6. 🆕 `/health` 命令 + daemon 主动通知
+
+- **`/health`** 显示 uptime、查询统计（成功 / 失败 / 中断）、最近 5 条错误及发生时间——怀疑 daemon 卡死时不用翻日志
+- 新增 `src/notification.ts` 是 daemon 全局的 `notify()` 通道——查询失败、未捕获异常、定时任务结果等"对话外事件"都能主动推到绑定微信
+- `process.on('uncaughtException' / 'unhandledRejection')` 现在会先 push 微信再退出，silent crash 不再隐身
+- 长查询（≥ 30s）完成时附一行 `✅ 完成 (耗时 X)` trailer，手机锁屏的用户瞄一眼就知道要不要看
+
+### 7. 🆕 长输出文件化
+
+回复超过 5000 字时自动写到 `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md`（带 metadata header：时间 / 模型 / cwd / token 用量 / prompt 节选），微信只发头 1500 字 preview + 文件路径。把 `outputs/` 软链到 iCloud Drive / OneDrive / Syncthing，手机 Files app 立刻能看完整内容——不再有 200 行代码淹没微信。
+
+### 8. 🆕 `/schedule` — 定时任务后台跑
+
+Daemon 内置的 cron-lite，从微信定义后台任务。简化的表达式格式（手机上手输标准 5 字段 cron 太容易错）：
+
+| 表达式 | 含义 |
+|---|---|
+| `every 30m` / `every 2h` / `every 1d` | 每 N 分钟/小时/天 |
+| `daily 09:00` | 每天 HH:MM |
+| `weekly mon 09:00` | 每周 dow（mon..sun） |
+| `monthly 15 14:00` | 每月 D 号（1-28） |
+
+例：`/schedule add daily 09:00 | 总结今日 git log，发我`
+
+每个到期任务用 `bypassPermissions` 模式起独立 query（后台任务不能等人审批），结果通过 `notify()` 推回微信。长结果走 #7 的归档机制。持久化在 `<DATA_DIR>/schedules.json`，daemon 重启不补跑（避免 thundering herd），按下次 cron 时间正常 due。
+
+命令：`/schedule list`、`/schedule add <cron> | <prompt>`、`/schedule remove <id>`、`/schedule show <id>`。
+
+### 9. 🆕 `/help` 分组 + 单命令详情
+
+`/help` 无参数显示按分类（会话 / 多会话 / 配置 / 用量·系统 / Skill / 定时任务）的命令列表；`/help <命令>` 显示该命令的详细用法和行为说明——不用每次扫描整张表。
+
+### 10. 🆕 `/tokens` 加人民币估算
+
+费用行现在同时显示 USD 和 CNY（≈¥X.XX），汇率 hardcode 7.2 mid-market（无 startup FX API 调用延迟，飘了改 `usage-tracker.ts` 即可）。
+
+---
+
 ## 继承自上游的功能
 
 - **实时进度推送** — 实时查看 Claude 的工具调用（🔧 Bash、📖 Read、🔍 Glob…）
@@ -165,7 +207,9 @@ npm run daemon -- logs       # 查看最近日志（tail -100）
 | `/cwd [路径]` | 查看或切换工作目录 |
 | `/skills [full]` | 列出已安装的 Claude Code Skill |
 | `/history [N]` | 查看最近 N 条对话（默认 20） |
-| `/tokens` | 查看 token 消耗（今日 / 7 天 / 30 天） |
+| `/tokens` | token 消耗 + USD/CNY 费用估算（今日 / 7 天 / 30 天） |
+| `/health` | Daemon 健康：uptime / 查询统计 / 最近错误 |
+| `/schedule list/add/remove/show` | 管理后台定时任务 |
 | `/compact` | 压缩上下文（开始新 SDK 会话，保留历史） |
 | `/undo [N]` | 撤销最近 N 条对话 |
 | `/version` | 查看版本 |

@@ -98,6 +98,48 @@ Two small but high-value robustness changes:
 
 ---
 
+## More productivity additions
+
+On top of the five hardening improvements above, several recent commits push the bridge from "works" to "lives in your pocket":
+
+### 6. 🆕 `/health` command + daemon-level proactive notifications
+
+- **`/health`** shows uptime, query stats (success / fail / abort counts), and the 5 most recent errors with timestamps — useful when you suspect the daemon is wedged but don't want to dig through `npm run daemon -- logs`
+- New `src/notification.ts` is a daemon-wide `notify()` channel — out-of-band events (query failures, uncaught exceptions, scheduled task results) surface to your bound WeChat account without needing an active conversation thread
+- `process.on('uncaughtException' / 'unhandledRejection')` now pushes to WeChat before exiting, so silent crashes are visible
+- Long queries (≥ 30s) get a `✅ 完成 (耗时 X)` trailer so phone-buried users can tell at a glance whether to scroll back
+
+### 7. 🆕 Long-output archiving
+
+Replies longer than 5000 characters are written to `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md` (with a metadata header: timestamp / model / cwd / token usage / prompt excerpt) and WeChat receives a 1500-char preview plus the file path. Pair the `outputs/` directory with iCloud Drive / OneDrive / Syncthing and you can read full results on your phone via the OS Files app — no more scrolling 200 lines of code in chat.
+
+### 8. 🆕 `/schedule` — background scheduled tasks
+
+A daemon-internal cron-lite. Define jobs from WeChat with a simplified expression dialect (standard 5-field cron is too easy to mistype on a phone):
+
+| Expression | Meaning |
+|---|---|
+| `every 30m` / `every 2h` / `every 1d` | Recurring interval |
+| `daily 09:00` | Every day at HH:MM |
+| `weekly mon 09:00` | Every week on dow (mon..sun) |
+| `monthly 15 14:00` | Every month on day D (1-28) |
+
+Example: `/schedule add daily 09:00 | summarize today's git activity in ~/Code/myproj`
+
+Each due task fires fresh against Claude with `bypassPermissions` (background jobs can't wait for human approval), and the result is pushed to WeChat via `notify()`. Long results get archived just like point 7. Persisted in `<DATA_DIR>/schedules.json`; survives daemon restarts (no thundering-herd backfill — just resumes at the next due time).
+
+Commands: `/schedule list`, `/schedule add <cron> | <prompt>`, `/schedule remove <id>`, `/schedule show <id>`.
+
+### 9. 🆕 `/help` grouping + per-command detail
+
+`/help` with no args now shows commands grouped by purpose (会话 / 多会话 / 配置 / 用量·系统 / Skill / 定时任务). `/help <cmd>` shows usage and behavior for a single command — so you don't have to scan the whole sheet every time.
+
+### 10. 🆕 `/tokens` cost estimate in CNY
+
+Cost line now shows both USD and CNY (≈¥X.XX) using a hardcoded mid-market rate of 7.2 — no startup latency from FX API calls; override the constant in `usage-tracker.ts` if it drifts.
+
+---
+
 ## Inherited features (from upstream)
 
 - **Real-time progress** — see Claude's tool calls live (🔧 Bash, 📖 Read, 🔍 Glob, …)
@@ -165,7 +207,9 @@ npm run daemon -- logs       # Tail recent logs (last 100 lines)
 | `/cwd [path]` | View or change the working directory |
 | `/skills [full]` | List installed Claude Code Skills |
 | `/history [N]` | Show last N chat messages (default 20) |
-| `/tokens` | Show token usage (today / 7-day / 30-day) |
+| `/tokens` | Show token usage with USD + CNY cost estimates (today / 7-day / 30-day) |
+| `/health` | Daemon health: uptime, query stats, recent errors |
+| `/schedule list/add/remove/show` | Manage background scheduled tasks |
 | `/compact` | Start a fresh SDK session, retain chat history |
 | `/undo [N]` | Undo last N messages |
 | `/version` | Show version |
