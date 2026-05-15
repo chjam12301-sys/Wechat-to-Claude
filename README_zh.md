@@ -1,4 +1,4 @@
-# Wechat-to-Claude
+# 立即安装
 
 ```bash
 git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git
