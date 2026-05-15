@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optional HTTP proxy support** — when standard `HTTPS_PROXY` /
+  `HTTP_PROXY` / `ALL_PROXY` environment variables are set at daemon
+  start, an `undici.ProxyAgent` is installed as the process-global
+  dispatcher so all outbound `fetch()` calls route through the
+  configured proxy. (`src/proxy.ts`, called from `src/main.ts` entry
+  before any other init.)
+- **Persistent env via `<DATA_DIR>/proxy.env`** — service managers
+  (launchd / systemd) don't inherit shell environment, so values set
+  in your shell rc don't reach the daemon. `scripts/daemon.sh` now
+  auto-sources this file on every start; already-exported environment
+  wins over file values. Format: `KEY=VALUE`, one per line, `#` for
+  comments. (`scripts/daemon.sh` `load_persistent_env`)
+
+### Dependencies
+
+- Added `undici@^8.3.0` — Node bundles undici internally for `fetch`
+  but doesn't expose its `ProxyAgent` API. Adding it as an explicit
+  runtime dep is the standard way to make `fetch()` proxy-aware.
+
 ## [1.1.0] — 2026-05-15
 
 Productivity release. Adds proactive notifications, daemon health

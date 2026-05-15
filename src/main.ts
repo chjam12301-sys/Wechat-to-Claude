@@ -16,6 +16,7 @@ import { routeCommand, type CommandContext, type CommandResult } from './command
 import { claudeQuery, type QueryOptions } from './claude/provider.js';
 import { loadConfig, saveConfig } from './config.js';
 import { logger } from './logger.js';
+import { initProxyFromEnv } from './proxy.js';
 import { recordUsage } from './usage-tracker.js';
 import { setNotifyContext, notify } from './notification.js';
 import {
@@ -1151,6 +1152,12 @@ async function runScheduledTask(
 // ---------------------------------------------------------------------------
 
 const command = process.argv[2];
+
+// MUST run before any fetch() call (including ones inside the imported
+// modules' top-level code) — installs an undici ProxyAgent globally if
+// HTTPS_PROXY env is set. Without this, Node's global fetch ignores the
+// proxy env and Anthropic API calls silently fail in China / corporate nets.
+initProxyFromEnv();
 
 if (command === 'setup') {
   runSetup().catch((err) => {

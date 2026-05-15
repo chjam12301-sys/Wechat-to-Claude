@@ -14,6 +14,43 @@ SERVICE_NAME="wechat-to-claude"
 OS_TYPE="$(uname -s)"
 
 # =============================================================================
+# Persistent env loader
+# =============================================================================
+# Why: launchd / systemd don't inherit your shell env, so values set in your
+# shell rc never reach the daemon. Stash a one-time `proxy.env` (despite the
+# name, any KEY=VALUE pairs you want exported to the daemon process work) in
+# DATA_DIR and we'll source it before generating the service definition.
+#
+# Format (one VAR=value per line, comments with # OK):
+#   FOO=bar
+#   QUUX=baz
+#
+# Already-exported shell env wins over the file (so ad-hoc overrides work).
+load_persistent_env() {
+  local env_file="${DATA_DIR}/proxy.env"
+  if [ -f "$env_file" ]; then
+    # Source non-comment, non-empty KEY=VALUE lines, but only export keys
+    # not already set in the current environment (env wins over file).
+    while IFS= read -r line; do
+      # Strip leading/trailing whitespace + skip blanks/comments
+      line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      [ -z "$line" ] && continue
+      case "$line" in \#*) continue ;; esac
+      # Parse KEY=VALUE
+      local key="${line%%=*}"
+      local val="${line#*=}"
+      # Strip surrounding quotes from value if present
+      val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+      if [ -z "${!key:-}" ]; then
+        export "$key=$val"
+      fi
+    done < "$env_file"
+  fi
+}
+
+load_persistent_env
+
+# =============================================================================
 # macOS (launchd) functions
 # =============================================================================
 

@@ -16,6 +16,7 @@ logs/
 # Runtime data — NEVER commit (contains WeChat session tokens, account creds, chat history)
 .wechat-claude-code/
 .wechat-to-claude/
+.daemon-state/
 
 # OS junk
 .DS_Store
