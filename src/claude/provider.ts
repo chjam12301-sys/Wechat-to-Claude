@@ -138,15 +138,27 @@ function resolveGlobalClaudeCliPath(): string | undefined {
     const claudeBin = execSync("which claude", { encoding: "utf8" }).trim();
     // Resolve symlinks to get the actual file
     const realBin = execSync(`readlink -f "${claudeBin}" 2>/dev/null || realpath "${claudeBin}" 2>/dev/null || echo "${claudeBin}"`, { encoding: "utf8" }).trim();
-    // On npm global installs, the binary itself is cli.js
+
+    // Case 1: legacy npm install — `which claude` already points at cli.js
     if (realBin.endsWith(".js") && existsSync(realBin)) return realBin;
-    // Otherwise look for cli.js next to the binary
+
+    // Case 2: legacy install — cli.js sits next to the bin shim
     const cliJs = join(dirname(realBin), "cli.js");
     if (existsSync(cliJs)) return cliJs;
-    // Try npm global prefix
+
+    // Case 3: legacy install — npm global prefix layout
     const npmPrefix = execSync("npm config get prefix", { encoding: "utf8" }).trim();
     const npmCli = join(npmPrefix, "lib", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
     if (existsSync(npmCli)) return npmCli;
+
+    // Case 4 (CURRENT, claude-code 2.x): native install — `which claude`
+    // is a Mach-O executable wrapping an internal claude.exe binary.
+    // The SDK uses ".js" extension to decide JS-vs-native; passing the
+    // native binary here makes the SDK spawn it natively, which inherits
+    // Desktop OAuth / keychain access and authenticates against an
+    // OAuth-only Anthropic account. The bundled JS cli.js fallback
+    // CANNOT — only the native binary can.
+    if (existsSync(realBin)) return realBin;
   } catch {
     // ignore
   }
