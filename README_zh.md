@@ -1,5 +1,19 @@
 # Wechat-to-Claude
 
+```bash
+git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git
+cd Wechat-to-Claude
+npm install
+npm run setup            # 扫码绑定微信
+npm run daemon -- start
+```
+
+> 📌 **安装命令放第一屏** — 因为 GitHub 上每个项目的安装命令都藏在第三屏第四节，我们想改改这个风气。
+
+提示：如果想让 Claude Code 在 `/skills` 列表里看到本工具，把 clone 目标路径改成 `~/.claude/skills/wechat-to-claude/`。
+
+---
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -109,44 +123,24 @@
 
 ---
 
-## 安装
+## 详细说明
 
-```bash
-git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git ~/Code/Wechat-to-Claude
-cd ~/Code/Wechat-to-Claude
-npm install
-```
+顶部的安装 block 跑完就能用。以下解释每一步在干什么、会看到什么。
 
-`postinstall` 自动编译 TypeScript。
-
-> **作为 Claude Code Skill 安装：** 也可以克隆到 `~/.claude/skills/wechat-to-claude/`，让 Claude Code 在 `/skills` 列表里看到它。
-
----
-
-## 快速开始
-
-### 1. 首次设置
-
-```bash
-npm run setup
-```
+### 1. `npm run setup` — 绑定微信
 
 会自动弹出二维码图片，用微信扫码绑定账号，然后配置 Claude Code 的工作目录。
 
-### 2. 启动服务
-
-```bash
-npm run daemon -- start
-```
+### 2. `npm run daemon -- start` — 守护进程持续运行
 
 - **macOS**：注册 launchd agent（开机自启 + 崩溃自重启）
 - **Linux**：使用 systemd user service（无 systemd 时回退到 nohup）
 
-### 3. 在微信中聊天
+### 3. 在微信里聊天
 
 直接在绑定的微信账号里发消息即可。回 `/help` 查看命令列表。
 
-### 4. 管理服务
+### 守护进程管理
 
 ```bash
 npm run daemon -- status     # 是否运行 / PID

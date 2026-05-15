@@ -1,5 +1,19 @@
 # Wechat-to-Claude
 
+```bash
+git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git
+cd Wechat-to-Claude
+npm install
+npm run setup            # scan QR code to bind WeChat
+npm run daemon -- start
+```
+
+> 📌 **Install commands first** — because every other GitHub project hides them four scrolls deep, and we're done with that.
+
+Tip: clone into `~/.claude/skills/wechat-to-claude/` instead if you want it listed under Claude Code's `/skills`.
+
+---
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -109,35 +123,15 @@ Two small but high-value robustness changes:
 
 ---
 
-## Installation
+## Setup walkthrough
 
-```bash
-git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git ~/Code/Wechat-to-Claude
-cd ~/Code/Wechat-to-Claude
-npm install
-```
+The install block at the top gets you running. Here's what each step does and what to expect.
 
-The `postinstall` hook compiles TypeScript automatically.
-
-> **As a Claude Code Skill:** alternatively clone into `~/.claude/skills/wechat-to-claude/` so Claude Code can list it under `/skills`.
-
----
-
-## Quick start
-
-### 1. First-time setup
-
-```bash
-npm run setup
-```
+### 1. `npm run setup` — bind your WeChat
 
 A QR code image opens — scan it with WeChat to bind your account, then configure the working directory Claude Code should run in.
 
-### 2. Start the daemon
-
-```bash
-npm run daemon -- start
-```
+### 2. `npm run daemon -- start` — keep it running
 
 - **macOS** — registers a launchd agent (auto-start at login, auto-restart on crash).
 - **Linux** — uses a systemd user service (falls back to `nohup` if systemd unavailable).
@@ -146,7 +140,7 @@ npm run daemon -- start
 
 Send any message to your bound WeChat account. Reply `/help` for the command list.
 
-### 4. Manage the daemon
+### Daemon management
 
 ```bash
 npm run daemon -- status     # Is it running? PID?
