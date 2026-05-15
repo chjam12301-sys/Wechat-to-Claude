@@ -34,3 +34,4 @@ Thumbs.db
 *.pid.lock
 .npm
 .eslintcache
+*.release-notes-*.md
