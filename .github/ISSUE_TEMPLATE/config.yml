@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Upstream wechat-claude-code
+    url: https://github.com/Wechat-ggGitHub/wechat-claude-code/issues
+    about: For issues that aren't specific to this fork's improvements (architecture,
+      ilink bot integration, original commands), please file with upstream first.

@@ -1,5 +1,11 @@
 # Wechat-to-Claude
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](#%E5%89%8D%E7%BD%AE%E6%9D%A1%E4%BB%B6)
+[![GitHub stars](https://img.shields.io/github/stars/chjam12301-sys/Wechat-to-Claude?style=social)](https://github.com/chjam12301-sys/Wechat-to-Claude/stargazers)
+
 > 在微信里和 Claude Code 聊天。
 
 [English](README.md) | **中文**
