@@ -1,0 +1,236 @@
+# Wechat-to-Claude
+
+> 在微信里和 Claude Code 聊天。
+
+[English](README.md) | **中文**
+
+把个人微信桥接到本地 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — 文字、图片识别、权限审批、斜杠命令，全部从手机微信驱动。
+
+本项目 fork 自 **[Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code)**，根据实际长期使用中暴露的并发问题做了硬核修复。
+
+---
+
+## 相对上游的改进
+
+### 🆕 批量权限审批 — 修掉"回 y/n 没反应"的并发 bug
+
+**Bug**（上游）：当 Claude 在同一轮推理里并发触发多个工具时，SDK 会几乎同时调多次 `onPermissionRequest`。上游的 broker 用 `Map<accountId, X>` 存 pending（每个微信账号只能有 1 个槽位），第 2 个请求进来会**把第 1 个秒拒**，然后第 1 个的 promise 被 resolve 后会把 `session.state` 切回 `processing`——这时你在微信里回的 `y` / `n` 就被路由到普通对话分支而不是权限分支了。结果就是：**"回 y/n 完全没反应"**。
+
+**修复**（本 fork）：
+
+1. **`permission.ts`** — pending 从 `Map<accountId, X>` 改成 per-account 的 FIFO 队列。每条 pending 有自己的 timer，独立 resolve。新增 `resolveAll()` 让 caller 用一次回复批量批准/拒绝整个队列。
+2. **`main.ts` `onPermissionRequest`** — 队列首次入队时启动 200ms 微 debounce，把同一 burst 的多条 pending 合并成 **1 条带编号列表的微信 prompt** 发出去：
+
+   ```
+   🔧 权限请求 (3 个工具同时申请)
+
+   [1] Bash: ls -la web/
+   [2] Read: package.json
+   [3] Bash: rm -rf node_modules
+
+   回复 y 全部允许，n 全部拒绝
+   (120秒未回复自动全拒)
+   ```
+
+3. **状态机** — `session.state` 只在队列彻底清空时才切回 `processing`，确保后续 y/n 永远能命中权限路由。
+
+用户视角：并发的工具请求在微信里**只看到 1 条 prompt**；回 `y` 全批；不再死锁。
+
+---
+
+## 继承自上游的功能
+
+- **实时进度推送** — 实时查看 Claude 的工具调用（🔧 Bash、📖 Read、🔍 Glob…）
+- **思考预览** — 每次工具调用前展示 💭 Claude 的推理摘要（前 300 字）
+- **中断支持** — Claude 处理中发送新消息可打断当前任务
+- **持久化系统提示词** — `/prompt` 设置全局指令（如"用中文回答"）
+- **图片识别** — 发照片让 Claude 分析
+- **微信端权限审批** — 回 `y` / `n` 控制工具执行
+- **斜杠命令** — `/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills` 等
+- **触发任意已安装 Skill** — 微信端直接调用 Claude Code Skill
+- **跨平台** — macOS（launchd）/ Linux（systemd + nohup 回退）
+- **会话持久化** — 跨消息恢复上下文
+- **限频保护** — 微信 API 限频时自动指数退避重试
+
+---
+
+## 前置条件
+
+- Node.js >= 18
+- macOS 或 Linux
+- 个人微信账号（扫码绑定）
+- 本地已安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（含 `@anthropic-ai/claude-agent-sdk`）
+  > SDK 支持第三方 API 提供商（OpenRouter、AWS Bedrock、OpenAI 兼容接口）——按需设置 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_API_KEY`。
+
+---
+
+## 安装
+
+```bash
+git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git ~/Code/Wechat-to-Claude
+cd ~/Code/Wechat-to-Claude
+npm install
+```
+
+`postinstall` 自动编译 TypeScript。
+
+> **作为 Claude Code Skill 安装：** 也可以克隆到 `~/.claude/skills/wechat-to-claude/`，让 Claude Code 在 `/skills` 列表里看到它。
+
+---
+
+## 快速开始
+
+### 1. 首次设置
+
+```bash
+npm run setup
+```
+
+会自动弹出二维码图片，用微信扫码绑定账号，然后配置 Claude Code 的工作目录。
+
+### 2. 启动服务
+
+```bash
+npm run daemon -- start
+```
+
+- **macOS**：注册 launchd agent（开机自启 + 崩溃自重启）
+- **Linux**：使用 systemd user service（无 systemd 时回退到 nohup）
+
+### 3. 在微信中聊天
+
+直接在绑定的微信账号里发消息即可。回 `/help` 查看命令列表。
+
+### 4. 管理服务
+
+```bash
+npm run daemon -- status     # 是否运行 / PID
+npm run daemon -- stop
+npm run daemon -- restart    # 代码更新后用
+npm run daemon -- logs       # 查看最近日志（tail -100）
+```
+
+---
+
+## 微信端命令
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 显示帮助 |
+| `/clear` | 清除当前会话（重新开始） |
+| `/reset` | 完全重置（包括工作目录等设置） |
+| `/model <名称>` | 切换 Claude 模型 |
+| `/permission <模式>` | 切换权限模式（见下表） |
+| `/prompt [内容]` | 查看或设置全局系统提示词 |
+| `/status` | 查看当前会话状态 |
+| `/cwd [路径]` | 查看或切换工作目录 |
+| `/skills [full]` | 列出已安装的 Claude Code Skill |
+| `/history [N]` | 查看最近 N 条对话（默认 20） |
+| `/tokens` | 查看 token 消耗（今日 / 7 天 / 30 天） |
+| `/compact` | 压缩上下文（开始新 SDK 会话，保留历史） |
+| `/undo [N]` | 撤销最近 N 条对话 |
+| `/version` | 查看版本 |
+| `/<skill> [参数]` | 触发任意已安装的 Claude Code Skill |
+
+---
+
+## 权限模式
+
+当 Claude 请求执行工具时，微信会收到权限请求。回 `y` / `yes` 允许，`n` / `no` 拒绝。120 秒未回复自动拒绝。
+
+| 模式 | 行为 |
+|------|------|
+| `default` | 每次工具使用需手动审批（走上面的批量审批机制） |
+| `acceptEdits` | 自动批准文件编辑，其他需审批 |
+| `plan` | 只读模式，不允许任何工具 |
+| `auto` | 自动批准所有工具 — **危险**，慎用 |
+
+通过 `/permission <模式>` 切换。
+
+---
+
+## 工作原理
+
+```
+手机微信 ←→ ilink bot API ←→ Node 守护进程 ←→ Claude Code SDK（本地）
+                (长轮询)            ↑
+                                    └─ 权限 broker
+                                       (FIFO 队列, 批量 resolve)
+```
+
+- 守护进程长轮询 ilink bot API 拉取新消息
+- 每条用户消息通过 `@anthropic-ai/claude-agent-sdk` 转发给 Claude Code
+- 工具调用和思考摘要在 Claude 工作时实时回流
+- 权限请求走批量 FIFO 队列（本 fork 的改进）
+- 回复推送回微信，限频时自动退避重试
+- 平台原生服务管理保证守护进程持久运行
+
+---
+
+## 数据目录
+
+所有数据存储在 `~/.wechat-to-claude/`（可用 `WCC_DATA_DIR` 环境变量覆盖）：
+
+```
+~/.wechat-to-claude/
+├── accounts/         # 微信账号凭证（每账号一个 JSON）
+├── config.env        # 全局配置（工作目录、模型、权限模式、系统提示词）
+├── sessions/         # 会话数据（每账号一个 JSON）
+├── get_updates_buf   # 消息轮询游标
+├── usage/            # 每日 token 用量 JSONL（被 /tokens 消费）
+└── logs/             # 每日轮转日志（保留 30 天）
+```
+
+⚠️ **`accounts/` 包含微信会话 token — 不要提交到 git，不要分享。**
+
+---
+
+## 开发
+
+```bash
+npm run dev    # tsc --watch
+npm run build  # 一次性编译
+```
+
+源码结构：
+
+```
+src/
+├── main.ts                    # Daemon 入口；消息处理；query 编排
+├── permission.ts              # FIFO 队列 broker（批量审批逻辑）
+├── session.ts                 # 多 session 存储 + 磁盘持久化
+├── config.ts / constants.ts   # 配置加载与路径
+├── logger.ts                  # 结构化日志 + 每日轮转
+├── usage-tracker.ts           # 每次 query 的 token 用量 → 每日 JSONL
+├── store.ts                   # 通用 JSON 文件读写
+├── claude/
+│   ├── provider.ts            # claude-agent-sdk 包装（流式、abort、retry）
+│   └── skill-scanner.ts       # 发现已安装的 Claude Code Skill
+├── commands/
+│   ├── router.ts              # 斜杠命令分发
+│   ├── handlers.ts            # 内置斜杠命令实现
+│   └── session.ts             # /session 多会话命令
+└── wechat/
+    ├── api.ts                 # ilink bot API 客户端
+    ├── monitor.ts             # 长轮询循环
+    ├── send.ts                # 发文本 + 限频退避
+    ├── login.ts               # 扫码绑定
+    ├── accounts.ts            # 账号凭证持久化
+    ├── media.ts               # 图片上传/下载
+    ├── crypto.ts              # CDN URL 签名
+    ├── cdn.ts                 # CDN 文件抓取
+    ├── sync-buf.ts            # 轮询游标管理
+    └── types.ts               # 微信消息类型定义
+```
+
+---
+
+## 致谢
+
+本 fork 基于 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) 构建——感谢上游维护者实现了原始的微信 ↔ Claude Code 桥接。本 fork 的批量权限审批改进解决了长期使用中暴露的并发问题；底层架构、ilink bot 集成、斜杠命令框架等都是上游的工作。
+
+## License
+
+MIT — 见 [LICENSE](LICENSE)。
+
+继承上游的 MIT license；copyright 持有者列在 LICENSE 文件中。

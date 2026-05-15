@@ -1,0 +1,236 @@
+# Wechat-to-Claude
+
+> Chat with Claude Code from your phone via WeChat.
+
+**English** | [中文](README_zh.md)
+
+A WeChat ↔ [Claude Code](https://docs.anthropic.com/en/docs/claude-code) bridge — text, image recognition, permission approvals, and slash commands, all driven from your personal WeChat.
+
+This project is a **fork of [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code)** with concurrency fixes battle-tested in extended real-world use.
+
+---
+
+## What's improved over upstream
+
+### 🆕 Batch permission approval — fixes a "y/n unresponsive" bug under concurrent tool calls
+
+**The bug** (upstream): when Claude launches multiple tools in parallel within the same turn, the SDK fires `onPermissionRequest` several times in quick succession. The upstream broker keyed pending permissions by `accountId` (one slot per WeChat account), so the second request **silently auto-rejected the first**, then the first's resolved promise flipped `session.state` back to `processing` mid-flight — at which point any `y` / `n` you typed in WeChat got routed as a regular chat message instead of as a permission decision. End result: **"reply y/n, nothing happens"**.
+
+**The fix** (this fork):
+
+1. **`permission.ts`** — pending permissions changed from `Map<accountId, X>` to a per-account FIFO queue. Each entry has its own timer and resolves independently. New `resolveAll()` lets the caller batch-approve / reject the whole queue with one user reply.
+2. **`main.ts` `onPermissionRequest`** — the first request in an empty queue schedules a 200ms micro-debounce, then sends a **single batched WeChat prompt** listing all sibling requests:
+
+   ```
+   🔧 权限请求 (3 个工具同时申请)
+
+   [1] Bash: ls -la web/
+   [2] Read: package.json
+   [3] Bash: rm -rf node_modules
+
+   回复 y 全部允许，n 全部拒绝
+   (120秒未回复自动全拒)
+   ```
+
+3. **State machine** — `session.state` only flips back to `processing` when the queue is fully drained, so subsequent y/n replies always reach the permission router.
+
+User-visible behavior: parallel tool requests collapse into a single WeChat prompt; one `y` approves them all; no more "unresponsive y/n" deadlocks.
+
+---
+
+## Inherited features (from upstream)
+
+- **Real-time progress** — see Claude's tool calls live (🔧 Bash, 📖 Read, 🔍 Glob, …)
+- **Thinking previews** — 💭 reasoning summary before each tool call (first 300 chars)
+- **Mid-query interrupt** — send a new message to abort the current task
+- **Persistent system prompt** — `/prompt` sets a global instruction (e.g. "always reply in English")
+- **Image recognition** — send a photo, Claude analyzes it
+- **Permission approval in WeChat** — reply `y` / `n` from your phone
+- **Slash commands** — `/help`, `/clear`, `/model`, `/prompt`, `/status`, `/skills`, …
+- **Trigger any installed Claude Code Skill** from WeChat
+- **Cross-platform** — macOS (launchd) / Linux (systemd + nohup fallback)
+- **Session persistence** — context survives across messages
+- **Rate-limit backoff** — exponential retry when WeChat throttles
+
+---
+
+## Prerequisites
+
+- Node.js >= 18
+- macOS or Linux
+- A personal WeChat account (you'll bind it via QR code)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed locally with `@anthropic-ai/claude-agent-sdk`
+  > The SDK supports third-party providers (OpenRouter, AWS Bedrock, OpenAI-compatible endpoints) — set `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` as needed.
+
+---
+
+## Installation
+
+```bash
+git clone git@github.com:chjam12301-sys/Wechat-to-Claude.git ~/Code/Wechat-to-Claude
+cd ~/Code/Wechat-to-Claude
+npm install
+```
+
+The `postinstall` hook compiles TypeScript automatically.
+
+> **As a Claude Code Skill:** alternatively clone into `~/.claude/skills/wechat-to-claude/` so Claude Code can list it under `/skills`.
+
+---
+
+## Quick start
+
+### 1. First-time setup
+
+```bash
+npm run setup
+```
+
+A QR code image opens — scan it with WeChat to bind your account, then configure the working directory Claude Code should run in.
+
+### 2. Start the daemon
+
+```bash
+npm run daemon -- start
+```
+
+- **macOS** — registers a launchd agent (auto-start at login, auto-restart on crash).
+- **Linux** — uses a systemd user service (falls back to `nohup` if systemd unavailable).
+
+### 3. Chat in WeChat
+
+Send any message to your bound WeChat account. Reply `/help` for the command list.
+
+### 4. Manage the daemon
+
+```bash
+npm run daemon -- status     # Is it running? PID?
+npm run daemon -- stop
+npm run daemon -- restart    # After code changes
+npm run daemon -- logs       # Tail recent logs (last 100 lines)
+```
+
+---
+
+## WeChat commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show help |
+| `/clear` | Clear current session (start fresh) |
+| `/reset` | Full reset (including working directory and other settings) |
+| `/model <name>` | Switch Claude model |
+| `/permission <mode>` | Switch permission mode (see below) |
+| `/prompt [text]` | View or set the global system prompt |
+| `/status` | Show current session state |
+| `/cwd [path]` | View or change the working directory |
+| `/skills [full]` | List installed Claude Code Skills |
+| `/history [N]` | Show last N chat messages (default 20) |
+| `/tokens` | Show token usage (today / 7-day / 30-day) |
+| `/compact` | Start a fresh SDK session, retain chat history |
+| `/undo [N]` | Undo last N messages |
+| `/version` | Show version |
+| `/<skill> [args]` | Trigger any installed Claude Code Skill |
+
+---
+
+## Permission modes
+
+When Claude requests a tool, WeChat receives a permission prompt. Reply `y` / `yes` to approve, `n` / `no` to deny. Auto-deny after 120 seconds.
+
+| Mode | Behavior |
+|------|----------|
+| `default` | Each tool use requires manual approval (uses the batch-approval mechanism above) |
+| `acceptEdits` | Auto-approve file edits, prompt for other tools |
+| `plan` | Read-only mode, no tools allowed |
+| `auto` | Auto-approve everything — **DANGEROUS**, use with care |
+
+Switch with `/permission <mode>`.
+
+---
+
+## Architecture
+
+```
+phone WeChat ←→ ilink bot API ←→ Node daemon ←→ Claude Code SDK (local)
+                  (long-poll)        ↑
+                                     └─ permission broker
+                                        (FIFO queue, batch resolve)
+```
+
+- The daemon long-polls the ilink bot API for new WeChat messages.
+- Each user message is forwarded to Claude Code via `@anthropic-ai/claude-agent-sdk`.
+- Tool calls and thinking summaries stream back as Claude works.
+- Permission prompts use the batched FIFO queue (this fork's improvement).
+- Replies push back to WeChat with rate-limit backoff.
+- Platform-native service management keeps the daemon alive.
+
+---
+
+## Data directory
+
+Everything lives under `~/.wechat-to-claude/` (override with `WCC_DATA_DIR` env var):
+
+```
+~/.wechat-to-claude/
+├── accounts/         # WeChat account credentials (one JSON per account)
+├── config.env        # Global config (working dir, model, permission mode, system prompt)
+├── sessions/         # Session data (one JSON per account)
+├── get_updates_buf   # Polling cursor
+├── usage/            # Daily token usage JSONL (consumed by /tokens)
+└── logs/             # Daily-rotating logs (30 day retention)
+```
+
+⚠️ **`accounts/` contains your WeChat session token — never commit, never share.**
+
+---
+
+## Development
+
+```bash
+npm run dev    # tsc --watch
+npm run build  # one-shot compile
+```
+
+Source layout:
+
+```
+src/
+├── main.ts                    # Daemon entry; message handling; query orchestration
+├── permission.ts              # FIFO queue broker (batch-approval logic)
+├── session.ts                 # Multi-session store with disk persistence
+├── config.ts / constants.ts   # Config loading and paths
+├── logger.ts                  # Structured logger with daily rotation
+├── usage-tracker.ts           # Per-query token usage → daily JSONL
+├── store.ts                   # Generic JSON file load/save
+├── claude/
+│   ├── provider.ts            # claude-agent-sdk wrapper (streaming, abort, retry)
+│   └── skill-scanner.ts       # Discover installed Claude Code Skills
+├── commands/
+│   ├── router.ts              # Slash command dispatch
+│   ├── handlers.ts            # Built-in slash command implementations
+│   └── session.ts             # /session multi-session commands
+└── wechat/
+    ├── api.ts                 # ilink bot API client
+    ├── monitor.ts             # Long-polling loop
+    ├── send.ts                # Send text + rate-limit backoff
+    ├── login.ts               # QR code binding
+    ├── accounts.ts            # Account credential persistence
+    ├── media.ts               # Image upload / download
+    ├── crypto.ts              # CDN URL signing
+    ├── cdn.ts                 # CDN file fetch
+    ├── sync-buf.ts            # Polling cursor management
+    └── types.ts               # WeChat message type definitions
+```
+
+---
+
+## Acknowledgments
+
+This fork builds on the foundation of [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) — huge thanks to the upstream maintainers for the original WeChat ↔ Claude Code bridge implementation. The batch permission approval improvement in this fork addresses a concurrency issue surfaced through months of real-world use; the underlying architecture, ilink bot integration, and slash command framework are all upstream's work.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Inherits the upstream MIT license; copyright holders are listed in the LICENSE file.

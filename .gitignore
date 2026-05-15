@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Logs
+*.log
+logs/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Runtime data — NEVER commit (contains WeChat session tokens, account creds, chat history)
+.wechat-claude-code/
+.wechat-to-claude/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Misc
+*.pid
+*.seed
+*.pid.lock
+.npm
+.eslintcache
