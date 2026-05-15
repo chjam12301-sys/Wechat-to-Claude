@@ -26,12 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifecycle). `process.on('uncaughtException')` and `unhandledRejection`
   push to WeChat before/instead of silent crash. Long queries (≥ 30s)
   get a `✅ 完成 (耗时 X)` trailer.
-- **Long-output archiving** — replies > 5000 chars are written to
-  `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md` with a metadata
-  header (timestamp / model / cwd / token usage / prompt excerpt).
-  WeChat receives a 1500-char preview + the file path. Atomic write
-  (.tmp → rename); never throws. Pair the directory with iCloud Drive /
-  OneDrive / Syncthing for phone access. (`src/output-archiver.ts` new)
+- **Long-output archiving + native WeChat file attachment** — replies
+  > 5000 chars are written to `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md`
+  with a metadata header (timestamp / model / cwd / token usage /
+  prompt excerpt) AND the same .md is pushed to WeChat as a clickable
+  file attachment via `sendFile()` — full upload flow `getuploadurl` →
+  AES-ECB encrypt → PUT to CDN → `sendmessage` with FILE item.
+  Atomic write (.tmp → rename) for the local copy; never throws. CDN
+  upload failure falls back to a path-only announcement so the file is
+  still reachable via the local filesystem. Same flow used by scheduled
+  task results (long preview pushes the .md too). (`src/output-archiver.ts`
+  new, `src/wechat/send.ts` adds `sendFile()`)
 - **`/schedule` — background scheduled tasks** — daemon-internal
   cron-lite. Simplified expression dialect (`every 30m`, `daily 09:00`,
   `weekly mon 09:00`, `monthly 15 14:00`). Each due task fires fresh

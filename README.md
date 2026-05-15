@@ -109,9 +109,11 @@ On top of the five hardening improvements above, several recent commits push the
 - `process.on('uncaughtException' / 'unhandledRejection')` now pushes to WeChat before exiting, so silent crashes are visible
 - Long queries (≥ 30s) get a `✅ 完成 (耗时 X)` trailer so phone-buried users can tell at a glance whether to scroll back
 
-### 7. 🆕 Long-output archiving
+### 7. 🆕 Long-output archiving + WeChat file attachment
 
-Replies longer than 5000 characters are written to `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md` (with a metadata header: timestamp / model / cwd / token usage / prompt excerpt) and WeChat receives a 1500-char preview plus the file path. Pair the `outputs/` directory with iCloud Drive / OneDrive / Syncthing and you can read full results on your phone via the OS Files app — no more scrolling 200 lines of code in chat.
+Replies longer than 5000 characters get archived to `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md` (with a metadata header: timestamp / model / cwd / token usage / prompt excerpt) **and the same .md is pushed to WeChat as a real clickable file attachment** (downloadable in chat, openable in any markdown viewer or text editor on your phone). Local archive is kept as backup.
+
+Implementation: `wechat/send.ts` `sendFile()` does the full upload flow — `getuploadurl` → AES-ECB encrypt → PUT to CDN → `sendmessage` with FILE item carrying the cdn_media handle. CDN upload failure falls back gracefully to a path-only announcement so the file is still reachable via the local filesystem (or paired with iCloud Drive / OneDrive / Syncthing for phone access).
 
 ### 8. 🆕 `/schedule` — background scheduled tasks
 

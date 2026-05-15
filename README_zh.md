@@ -109,9 +109,11 @@ npm run daemon -- start
 - `process.on('uncaughtException' / 'unhandledRejection')` 现在会先 push 微信再退出，silent crash 不再隐身
 - 长查询（≥ 30s）完成时附一行 `✅ 完成 (耗时 X)` trailer，手机锁屏的用户瞄一眼就知道要不要看
 
-### 7. 🆕 长输出文件化
+### 7. 🆕 长输出文件化 + 微信原生附件
 
-回复超过 5000 字时自动写到 `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md`（带 metadata header：时间 / 模型 / cwd / token 用量 / prompt 节选），微信只发头 1500 字 preview + 文件路径。把 `outputs/` 软链到 iCloud Drive / OneDrive / Syncthing，手机 Files app 立刻能看完整内容——不再有 200 行代码淹没微信。
+回复超过 5000 字时自动写到 `<DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8hex>.md`（带 metadata header：时间 / 模型 / cwd / token 用量 / prompt 节选），**同一个 .md 还会作为微信原生文件附件推到聊天里**——手机上可直接点击下载、用任何 markdown 阅读器或文本编辑器打开。本地归档作为留底。
+
+实现：`wechat/send.ts` 的 `sendFile()` 跑完整上传 flow —— `getuploadurl` → AES-ECB 加密 → PUT 到 CDN → `sendmessage` 附 FILE item 带 cdn_media 引用。CDN 上传失败时优雅降级为"发文件路径"通告，确保文件仍可通过本地文件系统访问（或通过你软链到 iCloud Drive / OneDrive / Syncthing 的方式同步到手机）。
 
 ### 8. 🆕 `/schedule` — 定时任务后台跑
 

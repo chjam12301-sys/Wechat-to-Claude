@@ -352,7 +352,14 @@ async function runDaemon(): Promise<void> {
   // a result preview to WeChat via notify(). Daemon-internal — cron lives
   // and dies with the daemon (which launchd/systemd keeps alive).
   const stopScheduler = startScheduler({
-    runTask: (task) => runScheduledTask(task, config),
+    runTask: (task) =>
+      runScheduledTask(
+        task,
+        config,
+        sender,
+        account.userId,
+        () => sharedCtx.lastContextToken,
+      ),
   });
 
   // Surface uncaught errors to WeChat so silent crashes don't leave you
@@ -939,16 +946,26 @@ async function sendToClaude(
             durationMs: Date.now() - queryStartTs,
           });
           if (archive) {
-            // Preview chunk first, then archive announcement.
+            // Preview chunk first, then push the .md as a real WeChat file
+            // attachment (clickable / downloadable in chat). Local archive
+            // is also kept under <DATA_DIR>/outputs/ as a backup.
             const preview = result.text.slice(0, PREVIEW_CHARS).trimEnd() + '\n\n…(以下省略)…';
             for (const chunk of splitMessage(preview)) {
               await sender.sendText(fromUserId, contextToken, chunk);
             }
-            await sender.sendText(
-              fromUserId,
-              contextToken,
-              formatArchiveAnnouncement(archive, result.text.length),
-            );
+            try {
+              await sender.sendFile(fromUserId, contextToken, archive.absolutePath);
+            } catch (err) {
+              // CDN upload failed — fall back to a path announcement so the
+              // user still has a way to access the full content.
+              const errMsg = err instanceof Error ? err.message : String(err);
+              logger.warn('sendFile failed, falling back to path announcement', { error: errMsg });
+              await sender.sendText(
+                fromUserId,
+                contextToken,
+                formatArchiveAnnouncement(archive, result.text.length) + `\n\n(微信附件上传失败: ${errMsg})`,
+              );
+            }
           } else {
             // Archive failed (disk error etc.) — fall back to full inline send.
             for (const chunk of splitMessage(result.text)) {
@@ -1032,6 +1049,9 @@ async function sendToClaude(
 async function runScheduledTask(
   task: ScheduledTask,
   config: ReturnType<typeof loadConfig>,
+  sender: ReturnType<typeof createSender>,
+  fromUserId: string,
+  getContextToken: () => string,
 ): Promise<TaskRunResult> {
   const startTs = Date.now();
   void notify('info', `🗓 定时任务启动 [${task.id}]\n${task.prompt.slice(0, 100)}${task.prompt.length > 100 ? '...' : ''}`);
@@ -1063,14 +1083,17 @@ async function runScheduledTask(
       ? fullText.slice(0, PREVIEW_LIMIT) + '\n\n…(以下省略)…'
       : fullText;
 
-    // Compose the WeChat push: header + preview + (if archived) file path
+    // First message: header + preview via the daemon-level notify channel.
     const headerLines = [
       `🗓 任务 [${task.id}] 完成 (耗时 ${(durationMs / 1000).toFixed(1)}s)`,
       `Cron: ${task.cron}`,
       '',
     ];
-    let body = headerLines.join('\n') + preview;
+    void notify('info', headerLines.join('\n') + preview);
 
+    // For long outputs, archive locally AND push as a WeChat file attachment.
+    // Path-only fallback if CDN upload fails (so the file is still reachable
+    // via the user's filesystem / cloud sync).
     if (fullText.length > PREVIEW_LIMIT) {
       const archive = archiveOutput(fullText, {
         model: result.usage?.model,
@@ -1087,11 +1110,22 @@ async function runScheduledTask(
         durationMs,
       });
       if (archive) {
-        body += `\n\n📄 完整 ${fullText.length.toLocaleString('zh-CN')} 字 → ${archive.absolutePath}`;
+        const ctxToken = getContextToken();
+        if (ctxToken) {
+          try {
+            await sender.sendFile(fromUserId, ctxToken, archive.absolutePath);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            logger.warn('Scheduled task: sendFile failed, falling back to path', { id: task.id, error: errMsg });
+            void notify('warning', `📄 完整 ${fullText.length.toLocaleString('zh-CN')} 字 → ${archive.absolutePath}\n\n(微信附件上传失败: ${errMsg})`);
+          }
+        } else {
+          // No contextToken yet — pure path fallback
+          void notify('info', `📄 完整 ${fullText.length.toLocaleString('zh-CN')} 字 → ${archive.absolutePath}`);
+        }
       }
     }
 
-    void notify('info', body);
     return {
       ts: Date.now(),
       success: true,
