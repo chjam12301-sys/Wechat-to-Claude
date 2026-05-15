@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-15
+
+Productivity release. Adds proactive notifications, daemon health
+visibility, long-output WeChat file attachments, scheduled background
+tasks, and `/help` ergonomics. +1423 / -65 lines across six commits.
+
 ### Added
 
 - **`/help` grouping + per-command detail** — `/help` with no args shows
@@ -125,5 +131,6 @@ as of upstream commit `df670b7` (May 2026). All credit for the original
 WeChat ↔ Claude Code bridge architecture, ilink bot integration, and
 slash command framework goes to upstream.
 
-[Unreleased]: https://github.com/chjam12301-sys/Wechat-to-Claude/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/chjam12301-sys/Wechat-to-Claude/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/chjam12301-sys/Wechat-to-Claude/releases/tag/v1.1.0
 [1.0.0]: https://github.com/chjam12301-sys/Wechat-to-Claude/releases/tag/v1.0.0
