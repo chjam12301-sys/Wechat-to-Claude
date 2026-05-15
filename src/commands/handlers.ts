@@ -5,6 +5,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readDailyUsage, readLastNDaysUsage, formatSummary } from '../usage-tracker.js';
+import { formatHealth } from '../health.js';
 
 export { handleSession } from './session.js';
 
@@ -36,6 +37,7 @@ const HELP_OVERVIEW = `📋 Wechat-to-Claude 命令
 
 【用量 / 系统】
   /tokens          token 消耗与费用估算（今日 / 7天 / 30天）
+  /health          daemon 运行状态（uptime / 查询统计 / 最近错误）
   /version         版本信息
 
 【Skill】
@@ -60,6 +62,7 @@ const HELP_DETAILS: Record<string, string> = {
   permission: '/permission [模式]\n\n  default      每次工具使用需手动审批（推荐）\n  acceptEdits  自动批准文件编辑，其他需审批\n  plan         只读模式，不允许任何工具\n  auto         自动批准所有工具（危险，慎用）',
   prompt: '/prompt [内容]\n\n  无参数        查看当前系统提示词\n  /prompt 内容  设置全局系统提示词\n  /prompt clear 清除系统提示词',
   tokens: '/tokens\n\n显示当前工作目录的 token 消耗与费用估算（今日 / 近 7 天 / 近 30 天）。\n费用按 Anthropic 官网公开单价估算，含人民币换算。',
+  health: '/health\n\nDaemon 运行健康状态：\n  • 启动时间与已运行时长\n  • 累计查询数（成功 / 失败 / 中断）\n  • 最近 5 条错误（含发生时间）\n所有数据 in-memory，daemon 重启后清零。',
   skills: '/skills [full]\n\n列出已安装的 Claude Code Skill。\n  /skills        简短列表\n  /skills full   含 description',
   version: '/version\n\n显示 wechat-to-claude 版本号。',
 };
@@ -175,6 +178,10 @@ export function handleStatus(ctx: CommandContext): CommandResult {
     `状态: ${s.state}`,
   ];
   return { reply: lines.join('\n'), handled: true };
+}
+
+export function handleHealth(_ctx: CommandContext, _args: string): CommandResult {
+  return { reply: formatHealth(), handled: true };
 }
 
 export function handleTokens(ctx: CommandContext, _args: string): CommandResult {

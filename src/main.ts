@@ -17,6 +17,14 @@ import { claudeQuery, type QueryOptions } from './claude/provider.js';
 import { loadConfig, saveConfig } from './config.js';
 import { logger } from './logger.js';
 import { recordUsage } from './usage-tracker.js';
+import { setNotifyContext, notify } from './notification.js';
+import {
+  recordQueryStart,
+  recordQuerySuccess,
+  recordQueryFailure,
+  recordQueryAbort,
+  formatDuration as fmtDuration,
+} from './health.js';
 import { DATA_DIR } from './constants.js';
 import { MessageType, type WeixinMessage, type MessageItem } from './wechat/types.js';
 
@@ -328,12 +336,39 @@ async function runDaemon(): Promise<void> {
 
   const monitor = createMonitor(api, callbacks);
 
+  // -- Wire daemon-level notifications --
+  // notify() is silent until the first user message gives us a contextToken;
+  // any startup notification is queued only to the logger.
+  setNotifyContext({
+    account,
+    sender,
+    getContextToken: () => sharedCtx.lastContextToken,
+  });
+
+  // Surface uncaught errors to WeChat so silent crashes don't leave you
+  // wondering "why isn't it responding?". Process still exits — launchd /
+  // systemd will respawn us.
+  process.on('uncaughtException', (err) => {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    logger.error('Uncaught exception', { error: msg });
+    // Fire-and-forget; we're about to exit, no point awaiting.
+    void notify('error', `Daemon 崩溃 (uncaughtException)\n${msg}\n\n服务管理器将自动重启。`);
+    setTimeout(() => process.exit(1), 200); // give notify a moment to flush
+  });
+  process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+    logger.error('Unhandled rejection', { error: msg });
+    void notify('error', `Promise 异常 (unhandledRejection)\n${msg}`);
+  });
+
   // -- Graceful shutdown --
 
   function shutdown(): void {
     logger.info('Shutting down...');
+    void notify('info', 'Daemon 收到 shutdown 信号，正在退出。');
     monitor.stop();
-    process.exit(0);
+    setNotifyContext(null);
+    setTimeout(() => process.exit(0), 200);
   }
 
   process.on('SIGINT', shutdown);
@@ -664,6 +699,13 @@ async function sendToClaude(
   session.state = 'processing';
   sessionStore.save(account.accountId, store);
 
+  // Health tracking: mark query start; the various exit paths below record
+  // success / failure / abort. Wall-clock duration is used both for the
+  // "long query" summary message and for the /health stats.
+  const queryStartTs = Date.now();
+  recordQueryStart();
+  const LONG_QUERY_MS = 30_000; // ≥ this gets a "✅ 完成 (耗时 X)" trailer
+
   // System prompt: only honor explicit /prompt setting. Leave undefined when
   // unset so the SDK falls back to its default. (Forks that want to live-load
   // CLAUDE.md from cwd can wrap a readFileSync here.)
@@ -858,6 +900,7 @@ async function sendToClaude(
     // accumulated result.text). The next query will reply to the new message.
     if (abortedDuringQuery) {
       logger.info('Claude query aborted by new message, suppressing all output');
+      recordQueryAbort();
     } else if (result.text) {
       if (result.error) {
         logger.warn('Claude query had error but returned text, using text', { error: result.error });
@@ -870,15 +913,35 @@ async function sendToClaude(
           await sender.sendText(fromUserId, contextToken, chunk);
         }
       }
+      recordQuerySuccess();
+      // Long-query trailer: if the user sent a quick message and put their
+      // phone away, this single line tells them "yes it's done" without
+      // having to scroll the whole reply.
+      const elapsed = Date.now() - queryStartTs;
+      if (elapsed >= LONG_QUERY_MS) {
+        try {
+          await sender.sendText(fromUserId, contextToken, `✅ 完成 (耗时 ${fmtDuration(elapsed)})`);
+        } catch {
+          // Trailer is best-effort; don't fail the query for it.
+        }
+      }
     } else if (result.error) {
       const isAborted = /aborted by user/i.test(result.error);
       if (!isAborted) {
         logger.error('Claude query error', { error: result.error });
+        recordQueryFailure(result.error, 'sdk-error');
         await sender.sendText(fromUserId, contextToken, '⚠️ Claude 处理请求时出错，请稍后重试。');
+      } else {
+        recordQueryAbort();
       }
       // abort 是用户连发触发的, 新消息已在处理, 不需要兜底告知
     } else if (!anySent) {
+      recordQueryFailure('Empty result with no error', 'empty-result');
       await sender.sendText(fromUserId, contextToken, 'ℹ️ Claude 无返回内容（可能因权限被拒而终止）');
+    } else {
+      // Streamed something but no final result.text — treat as success since
+      // the user already saw output.
+      recordQuerySuccess();
     }
 
     // Update session with new SDK session ID
@@ -890,9 +953,11 @@ async function sendToClaude(
     if (isAbort) {
       // Query was cancelled by a new incoming message — exit silently
       logger.info('Claude query aborted by new message');
+      recordQueryAbort();
     } else {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error('Error in sendToClaude', { error: errorMsg });
+      recordQueryFailure(errorMsg, 'thrown');
       await sender.sendText(fromUserId, contextToken, '⚠️ 处理消息时出错，请稍后重试。');
     }
     session.state = 'idle';
