@@ -12,29 +12,69 @@ This project is a **fork of [Wechat-ggGitHub/wechat-claude-code](https://github.
 
 ## What's improved over upstream
 
-### 🆕 Batch permission approval — fixes a "y/n unresponsive" bug under concurrent tool calls
+This fork adds **five hardening improvements** driven by extended real-world usage. Each one addresses a concrete problem that surfaced in production.
+
+### 1. 🆕 Batch permission approval — fixes "y/n unresponsive" under concurrent tools
 
 **The bug** (upstream): when Claude launches multiple tools in parallel within the same turn, the SDK fires `onPermissionRequest` several times in quick succession. The upstream broker keyed pending permissions by `accountId` (one slot per WeChat account), so the second request **silently auto-rejected the first**, then the first's resolved promise flipped `session.state` back to `processing` mid-flight — at which point any `y` / `n` you typed in WeChat got routed as a regular chat message instead of as a permission decision. End result: **"reply y/n, nothing happens"**.
 
-**The fix** (this fork):
+**The fix**:
 
-1. **`permission.ts`** — pending permissions changed from `Map<accountId, X>` to a per-account FIFO queue. Each entry has its own timer and resolves independently. New `resolveAll()` lets the caller batch-approve / reject the whole queue with one user reply.
-2. **`main.ts` `onPermissionRequest`** — the first request in an empty queue schedules a 200ms micro-debounce, then sends a **single batched WeChat prompt** listing all sibling requests:
+- **`permission.ts`** — pending permissions changed from `Map<accountId, X>` to a per-account FIFO queue. Each entry has its own timer and resolves independently. New `resolveAll()` batch-approves / rejects the whole queue with one user reply.
+- **`main.ts` `onPermissionRequest`** — the first request in an empty queue schedules a 200ms micro-debounce, then sends a single batched WeChat prompt listing all sibling requests:
 
-   ```
-   🔧 权限请求 (3 个工具同时申请)
+  ```
+  🔧 权限请求 (3 个工具同时申请)
 
-   [1] Bash: ls -la web/
-   [2] Read: package.json
-   [3] Bash: rm -rf node_modules
+  [1] Bash: ls -la web/
+  [2] Read: package.json
+  [3] Bash: rm -rf node_modules
 
-   回复 y 全部允许，n 全部拒绝
-   (120秒未回复自动全拒)
-   ```
+  回复 y 全部允许，n 全部拒绝
+  (120秒未回复自动全拒)
+  ```
 
-3. **State machine** — `session.state` only flips back to `processing` when the queue is fully drained, so subsequent y/n replies always reach the permission router.
+- **State machine** — `session.state` only flips back to `processing` when the queue is fully drained, so subsequent y/n replies always reach the permission router.
 
-User-visible behavior: parallel tool requests collapse into a single WeChat prompt; one `y` approves them all; no more "unresponsive y/n" deadlocks.
+User-visible: parallel tool requests collapse into a single WeChat prompt; one `y` approves them all; no more deadlocks.
+
+### 2. 🆕 Multi-session management
+
+A full multi-session subsystem so you can keep separate conversations under different working directories and switch between them from WeChat:
+
+- New commands: `/session list`, `/session new <label> [cwd]`, `/session switch <label>`, `/session pickup`
+- **`/session pickup`** ingests the most recent local Claude CLI jsonl session under `~/.claude/projects/<encoded-cwd>/` — so you can resume in WeChat a conversation you started from your desktop terminal
+- Per-session `lastActive` tracking, label validation, persistent `currentLabel` cursor
+- **Automatic migration** from upstream's single-session schema (legacy `Session` JSON files are detected on load and rewritten as `MultiSessionStore` shape — zero user action required)
+- Files: `src/commands/session.ts` (new), `src/session.ts` (+304 lines)
+
+### 3. 🆕 Burst message debounce
+
+When you send multiple WeChat messages in quick succession (typing thoughts out incrementally), the daemon now coalesces them into a single Claude query instead of firing N parallel queries:
+
+- **1500ms** sliding window per message arrival; **3000ms** hard cap from first arrival
+- If a new message arrives mid-burst, the in-flight query is **aborted and restarted** with the joined prompt (no wasted output, no double-billing)
+- Slash commands bypass the buffer (handled directly, no debounce delay)
+- Single-image mode in burst windows: first image wins, subsequent images dropped
+- Chat-history rollback: each rebuild deletes the prior round's user entries from the tail and rewrites once with the merged prompt
+- Files: `src/main.ts` (+~150 lines of debounce logic + reentrancy guard)
+
+### 4. 🆕 Token usage tracking + `/tokens` command
+
+Per-query token consumption is appended to a daily JSONL file, and `/tokens` returns aggregated summaries (today / last 7 days / last 30 days) so you can monitor spend without leaving WeChat:
+
+- Tracks `input` / `output` / `cache_creation` / `cache_read` tokens per query, plus model
+- Daily file rotation under `<DATA_DIR>/usage/YYYY-MM-DD.jsonl`
+- Failure policy: never throws — usage tracking is observability, not critical path
+- Files: `src/usage-tracker.ts` (new), `src/claude/provider.ts` (usage extraction from SDK result message), `src/commands/handlers.ts` (`/tokens` handler)
+
+### 5. 🆕 Crash recovery + buffering state
+
+Two small but high-value robustness changes:
+
+- **Startup self-heal** — daemon resets stale non-`idle` session states on startup, so a crash mid-permission-prompt or mid-query doesn't leave the next message wedged in `waiting_permission` forever
+- **`'buffering'` SessionState** — explicit state for the debounce window, so message routing (slash commands, `/clear` reset, abort logic) can react correctly during a burst
+- Files: `src/main.ts` (startup loop), `src/session.ts` (`SessionState` enum)
 
 ---
 
@@ -45,11 +85,10 @@ User-visible behavior: parallel tool requests collapse into a single WeChat prom
 - **Mid-query interrupt** — send a new message to abort the current task
 - **Persistent system prompt** — `/prompt` sets a global instruction (e.g. "always reply in English")
 - **Image recognition** — send a photo, Claude analyzes it
-- **Permission approval in WeChat** — reply `y` / `n` from your phone
-- **Slash commands** — `/help`, `/clear`, `/model`, `/prompt`, `/status`, `/skills`, …
+- **Permission approval in WeChat** — reply `y` / `n` from your phone (this fork's improvement makes it concurrency-safe)
+- **Slash commands** — `/help`, `/clear`, `/model`, `/prompt`, `/status`, `/skills`, `/cwd`, `/history`, `/compact`, `/undo`, `/version`, …
 - **Trigger any installed Claude Code Skill** from WeChat
 - **Cross-platform** — macOS (launchd) / Linux (systemd + nohup fallback)
-- **Session persistence** — context survives across messages
 - **Rate-limit backoff** — exponential retry when WeChat throttles
 
 ---

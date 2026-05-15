@@ -12,29 +12,69 @@
 
 ## 相对上游的改进
 
-### 🆕 批量权限审批 — 修掉"回 y/n 没反应"的并发 bug
+本 fork 在长期实际使用中沉淀了 **5 个硬核改进**，每条都来自真实生产场景的痛点。
 
-**Bug**（上游）：当 Claude 在同一轮推理里并发触发多个工具时，SDK 会几乎同时调多次 `onPermissionRequest`。上游的 broker 用 `Map<accountId, X>` 存 pending（每个微信账号只能有 1 个槽位），第 2 个请求进来会**把第 1 个秒拒**，然后第 1 个的 promise 被 resolve 后会把 `session.state` 切回 `processing`——这时你在微信里回的 `y` / `n` 就被路由到普通对话分支而不是权限分支了。结果就是：**"回 y/n 完全没反应"**。
+### 1. 🆕 批量权限审批 — 修掉"回 y/n 没反应"的并发 bug
 
-**修复**（本 fork）：
+**Bug**（上游）：当 Claude 在同一轮推理里并发触发多个工具时，SDK 会几乎同时调多次 `onPermissionRequest`。上游的 broker 用 `Map<accountId, X>` 存 pending（每个微信账号只能有 1 个槽位），第 2 个请求进来会**把第 1 个秒拒**，然后第 1 个的 promise 被 resolve 后会把 `session.state` 切回 `processing`——这时你在微信里回的 `y` / `n` 就被路由到普通对话分支而不是权限分支了。结果：**"回 y/n 完全没反应"**。
 
-1. **`permission.ts`** — pending 从 `Map<accountId, X>` 改成 per-account 的 FIFO 队列。每条 pending 有自己的 timer，独立 resolve。新增 `resolveAll()` 让 caller 用一次回复批量批准/拒绝整个队列。
-2. **`main.ts` `onPermissionRequest`** — 队列首次入队时启动 200ms 微 debounce，把同一 burst 的多条 pending 合并成 **1 条带编号列表的微信 prompt** 发出去：
+**修复**：
 
-   ```
-   🔧 权限请求 (3 个工具同时申请)
+- **`permission.ts`** — pending 从 `Map<accountId, X>` 改成 per-account FIFO 队列。每条 pending 有自己的 timer，独立 resolve。新增 `resolveAll()` 让 caller 用一次回复批量批准/拒绝整个队列。
+- **`main.ts` `onPermissionRequest`** — 队列首次入队时启动 200ms 微 debounce，把同一 burst 的多条 pending 合并成 1 条带编号列表的微信 prompt：
 
-   [1] Bash: ls -la web/
-   [2] Read: package.json
-   [3] Bash: rm -rf node_modules
+  ```
+  🔧 权限请求 (3 个工具同时申请)
 
-   回复 y 全部允许，n 全部拒绝
-   (120秒未回复自动全拒)
-   ```
+  [1] Bash: ls -la web/
+  [2] Read: package.json
+  [3] Bash: rm -rf node_modules
 
-3. **状态机** — `session.state` 只在队列彻底清空时才切回 `processing`，确保后续 y/n 永远能命中权限路由。
+  回复 y 全部允许，n 全部拒绝
+  (120秒未回复自动全拒)
+  ```
 
-用户视角：并发的工具请求在微信里**只看到 1 条 prompt**；回 `y` 全批；不再死锁。
+- **状态机** — `session.state` 只在队列彻底清空时才切回 `processing`，确保后续 y/n 永远能命中权限路由。
+
+用户视角：并发的工具请求在微信里只看到 1 条 prompt；回 `y` 全批；不再死锁。
+
+### 2. 🆕 多 Session 管理子系统
+
+完整的多会话支持，让你能在不同工作目录下保持独立对话，并在微信里随意切换：
+
+- 新增命令：`/session list`、`/session new <label> [cwd]`、`/session switch <label>`、`/session pickup`
+- **`/session pickup`** 接入桌面端 Claude CLI 在 `~/.claude/projects/<encoded-cwd>/` 下最近的 jsonl 会话——意味着你可以在电脑上开始的对话直接续到微信
+- per-session `lastActive` 时间戳（用于 list 排序）、label 校验、持久化 `currentLabel` 游标
+- **自动迁移**：上游单 session schema 的旧 JSON 文件在 load 时自动检测并重写成 `MultiSessionStore` 形式（用户零感知）
+- 文件：`src/commands/session.ts`（新增）、`src/session.ts`（+304 行）
+
+### 3. 🆕 消息 burst 合并 (debounce)
+
+用户连发多条微信消息时（比如打字思路一段段发出来），daemon 现在会把它们合并成**一次 Claude query**，而不是触发 N 次并行 query：
+
+- 每条消息进来后 **1500ms** 滑动窗口；从首条消息算起 **3000ms** 硬封顶
+- burst 中途有新消息进来，**aborted 当前进行中的 query 并用合并后的 prompt 重启**（不浪费输出、不重复计费）
+- 斜杠命令绕开 buffer（直接处理，无 debounce 延迟）
+- 单图模式：burst 窗口内第一张图生效，后续图被丢弃
+- 聊天历史回滚：每次 rebuild 时删除前一轮的 user 条目，再用合并后的 prompt 重写一次
+- 文件：`src/main.ts`（+~150 行 debounce 逻辑 + 重入保护）
+
+### 4. 🆕 Token 用量追踪 + `/tokens` 命令
+
+每次 query 的 token 消耗追加到日 JSONL 文件，`/tokens` 命令汇总今日 / 近 7 天 / 近 30 天用量，让你不离开微信就能监控开销：
+
+- 每次 query 跟踪 `input` / `output` / `cache_creation` / `cache_read` 四类 token 加 model 名称
+- 日文件轮转：`<DATA_DIR>/usage/YYYY-MM-DD.jsonl`
+- 失败策略：永不抛错——用量追踪是 observability，不是关键路径
+- 文件：`src/usage-tracker.ts`（新增）、`src/claude/provider.ts`（从 SDK result message 提取 usage）、`src/commands/handlers.ts`（`/tokens` handler）
+
+### 5. 🆕 崩溃自愈 + buffering 状态
+
+两个小但高价值的稳健性改进：
+
+- **启动自愈** — daemon 启动时重置 stale 非 `idle` 状态的 session，避免崩溃在权限请求中或 query 中导致下一条消息永远卡在 `waiting_permission`
+- **`'buffering'` SessionState** — debounce 窗口的显式状态，让消息路由（斜杠命令、`/clear` 重置、abort 逻辑）能正确响应 burst 期间的消息
+- 文件：`src/main.ts`（启动循环）、`src/session.ts`（`SessionState` enum）
 
 ---
 
@@ -45,11 +85,10 @@
 - **中断支持** — Claude 处理中发送新消息可打断当前任务
 - **持久化系统提示词** — `/prompt` 设置全局指令（如"用中文回答"）
 - **图片识别** — 发照片让 Claude 分析
-- **微信端权限审批** — 回 `y` / `n` 控制工具执行
-- **斜杠命令** — `/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills` 等
+- **微信端权限审批** — 回 `y` / `n` 控制工具执行（本 fork 让它并发安全）
+- **斜杠命令** — `/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills`、`/cwd`、`/history`、`/compact`、`/undo`、`/version` 等
 - **触发任意已安装 Skill** — 微信端直接调用 Claude Code Skill
 - **跨平台** — macOS（launchd）/ Linux（systemd + nohup 回退）
-- **会话持久化** — 跨消息恢复上下文
 - **限频保护** — 微信 API 限频时自动指数退避重试
 
 ---
