@@ -164,16 +164,32 @@ function fmt(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-export function formatSummary(summary: UsageSummary, label: string): string {
+/**
+ * Format a summary block for /tokens output.
+ *
+ * @param fxRateCnyPerUsd - Optional CNY-per-USD exchange rate. When provided,
+ *   appends an "≈¥X.XX" estimate on the cost line. Pass `undefined` to show
+ *   USD only. Default is `7.2` — public mid-market rate, intentionally
+ *   hardcoded (no FX API call); override here if it drifts significantly.
+ */
+export function formatSummary(
+  summary: UsageSummary,
+  label: string,
+  fxRateCnyPerUsd: number | undefined = 7.2,
+): string {
   if (summary.calls === 0) {
     return `${label}: 暂无数据`;
   }
+  const usd = summary.estimated_cost_usd;
+  const costLine = fxRateCnyPerUsd
+    ? `  约 $${usd.toFixed(4)} USD (≈¥${(usd * fxRateCnyPerUsd).toFixed(2)})`
+    : `  约 $${usd.toFixed(4)} USD`;
   return [
     `${label}:`,
     `  调用 ${summary.calls} 次`,
     `  输入 ${fmt(summary.input)} | 输出 ${fmt(summary.output)}`,
     `  缓存写 ${fmt(summary.cache_creation)} | 缓存读 ${fmt(summary.cache_read)}`,
     `  合计 ${fmt(summary.total_tokens)} tokens`,
-    `  约 $${summary.estimated_cost_usd.toFixed(4)} USD`,
+    costLine,
   ].join('\n');
 }

@@ -8,36 +8,61 @@ import { readDailyUsage, readLastNDaysUsage, formatSummary } from '../usage-trac
 
 export { handleSession } from './session.js';
 
-const HELP_TEXT = `可用命令：
+// Help system: grouped overview + per-command detail.
+// Add a new command? Add it to BOTH:
+//   1. The right group in HELP_OVERVIEW below
+//   2. HELP_DETAILS so /help <cmd> shows usage + behavior
+const HELP_OVERVIEW = `📋 Wechat-to-Claude 命令
 
-会话管理：
-  /help             显示帮助
-  /clear            清除当前会话
-  /reset            完全重置（包括工作目录等设置）
-  /status           查看当前会话状态
-  /tokens           查看 token 消耗（今日 / 近 7 天 / 近 30 天）
-  /compact          压缩上下文（开始新 SDK 会话，保留历史）
-  /history [数量]   查看对话记录（默认最近20条）
-  /undo [数量]      撤销最近对话（默认1条）
+【会话】
+  /clear           清除当前会话
+  /reset           完全重置（含工作目录等设置）
+  /status          查看会话状态
+  /compact         压缩上下文（保留聊天历史）
+  /history [N]     查看最近对话（默 20）
+  /undo [N]        撤销最近对话（默 1）
 
-多会话：
-  /session list                  列出所有保存的会话
-  /session new <label> [cwd]     新建会话（cwd 可省，继承当前）
-  /session switch <label>        切换到指定会话
-  /session pickup                接入电脑终端最近的会话
+【多会话】
+  /session list                列出所有保存的会话
+  /session new <label> [cwd]   新建会话
+  /session switch <label>      切换到指定会话
+  /session pickup              接入电脑终端最近的会话
 
-配置：
-  /cwd [路径]       查看或切换工作目录
-  /model [名称]     查看或切换 Claude 模型
-  /permission [模式] 查看或切换权限模式
-  /prompt [内容]    查看或设置系统提示词（全局生效）
+【配置】
+  /cwd [路径]      工作目录
+  /model [名称]    切换 Claude 模型
+  /permission [模式]  default / acceptEdits / plan / auto
+  /prompt [内容]   系统提示词（全局）
 
-其他：
-  /skills [full]    列出已安装的 skill（full 显示描述）
-  /version          查看版本信息
-  /<skill> [参数]   触发已安装的 skill
+【用量 / 系统】
+  /tokens          token 消耗与费用估算（今日 / 7天 / 30天）
+  /version         版本信息
 
-直接输入文字即可与 Claude Code 对话`;
+【Skill】
+  /skills [full]   列出已安装 Skill
+  /<skill> [args]  触发任意 Skill
+
+输入 /help <命令> 查看具体说明（如 /help session）
+直接发消息即可与 Claude Code 对话`;
+
+// Per-command detail. Key is the command name without the leading slash.
+const HELP_DETAILS: Record<string, string> = {
+  help: '/help [命令]\n\n无参数显示总览；带命令名显示该命令的详细用法。\n例: /help session',
+  clear: '/clear\n\n清除当前会话的 SDK session ID 与聊天历史；下次发消息开始新对话。\n保留：工作目录、模型、权限模式、系统提示词。',
+  reset: '/reset\n\n完全重置当前会话：清 SDK session ID + 聊天历史 + 模型 + 权限模式 + 工作目录全部恢复默认。\n比 /clear 更彻底。',
+  status: '/status\n\n显示当前会话状态：工作目录 / 模型 / 权限模式 / SDK 会话 ID / 内部状态（idle/processing/waiting_permission/buffering）。',
+  compact: '/compact\n\n压缩上下文：清除当前 SDK 会话 ID（token 清零），但保留聊天历史。\n下次消息会开始新 SDK 会话，前面的聊天可用 /history 查看。',
+  history: '/history [N]\n\n显示最近 N 条对话（默认 20，最多 100）。\n例: /history 50',
+  undo: '/undo [N]\n\n撤销最近 N 条对话（默 1）。只删本地聊天历史，不影响 SDK 会话本身。',
+  session: '/session <子命令>\n\n  list                列出所有保存的会话（按最近活跃排序）\n  new <label> [cwd]   新建会话；cwd 省略则继承当前会话\n  switch <label>      切换到指定会话\n  pickup              接入桌面端 Claude CLI 最近的 jsonl 会话',
+  cwd: '/cwd [路径]\n\n无参数显示当前工作目录；带路径切换。\n例: /cwd ~/Code/myproj',
+  model: '/model [名称]\n\n无参数显示当前模型；带名称切换。\n例: /model claude-sonnet-4-5',
+  permission: '/permission [模式]\n\n  default      每次工具使用需手动审批（推荐）\n  acceptEdits  自动批准文件编辑，其他需审批\n  plan         只读模式，不允许任何工具\n  auto         自动批准所有工具（危险，慎用）',
+  prompt: '/prompt [内容]\n\n  无参数        查看当前系统提示词\n  /prompt 内容  设置全局系统提示词\n  /prompt clear 清除系统提示词',
+  tokens: '/tokens\n\n显示当前工作目录的 token 消耗与费用估算（今日 / 近 7 天 / 近 30 天）。\n费用按 Anthropic 官网公开单价估算，含人民币换算。',
+  skills: '/skills [full]\n\n列出已安装的 Claude Code Skill。\n  /skills        简短列表\n  /skills full   含 description',
+  version: '/version\n\n显示 wechat-to-claude 版本号。',
+};
 
 // 缓存 skill 列表，避免每次命令都扫描文件系统
 let cachedSkills: SkillInfo[] | null = null;
@@ -58,8 +83,19 @@ export function invalidateSkillCache(): void {
   cachedSkills = null;
 }
 
-export function handleHelp(_args: string): CommandResult {
-  return { reply: HELP_TEXT, handled: true };
+export function handleHelp(args: string): CommandResult {
+  const target = (args ?? '').trim().toLowerCase().replace(/^\//, '');
+  if (!target) {
+    return { reply: HELP_OVERVIEW, handled: true };
+  }
+  const detail = HELP_DETAILS[target];
+  if (detail) {
+    return { reply: detail, handled: true };
+  }
+  return {
+    reply: `未找到命令 "${target}" 的详细说明。\n输入 /help 看完整列表。`,
+    handled: true,
+  };
 }
 
 export function handleClear(ctx: CommandContext): CommandResult {
