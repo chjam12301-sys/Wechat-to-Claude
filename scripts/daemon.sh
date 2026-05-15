@@ -135,7 +135,10 @@ macos_stop() {
 
 macos_status() {
   if macos_is_loaded; then
-    local pid=$(pgrep -f "wechat-to-claude/dist/main.js start" 2>/dev/null | head -1)
+    # Use case-insensitive grep on ps output instead of pgrep (BSD pgrep
+    # has no -i; the project dir lives under "Wechat-to-Claude" with mixed
+    # case but our pattern was lowercase — silent miss).
+    local pid=$(ps -axo pid,command 2>/dev/null | grep -i 'wechat-to-claude/dist/main.js start' | grep -v grep | awk '{print $1}' | head -1)
     if [ -n "$pid" ]; then
       echo "Running (PID: $pid)"
     else
