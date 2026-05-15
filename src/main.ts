@@ -25,6 +25,7 @@ import {
   recordQueryAbort,
   formatDuration as fmtDuration,
 } from './health.js';
+import { archiveOutput, formatArchiveAnnouncement } from './output-archiver.js';
 import { DATA_DIR } from './constants.js';
 import { MessageType, type WeixinMessage, type MessageItem } from './wechat/types.js';
 
@@ -906,11 +907,48 @@ async function sendToClaude(
         logger.warn('Claude query had error but returned text, using text', { error: result.error });
       }
       sessionStore.addChatMessage(session, 'assistant', result.text);
-      // If nothing was streamed at all (e.g. streaming not supported), send full text now
+      // If nothing was streamed at all (e.g. streaming not supported), send full text now.
+      // For very long outputs (> LONG_OUTPUT_CHARS), archive to a file and send a short
+      // preview + path instead of dumping 5K+ chars across many WeChat messages.
       if (!anySent) {
-        const chunks = splitMessage(result.text);
-        for (const chunk of chunks) {
-          await sender.sendText(fromUserId, contextToken, chunk);
+        const LONG_OUTPUT_CHARS = 5000;
+        const PREVIEW_CHARS = 1500;
+        if (result.text.length > LONG_OUTPUT_CHARS) {
+          const archive = archiveOutput(result.text, {
+            model: result.usage?.model,
+            cwd: session.workingDirectory || config.workingDirectory,
+            promptExcerpt: (userText || '').slice(0, 200),
+            usage: result.usage
+              ? {
+                  input: result.usage.input,
+                  output: result.usage.output,
+                  cache_creation: result.usage.cache_creation,
+                  cache_read: result.usage.cache_read,
+                }
+              : undefined,
+            durationMs: Date.now() - queryStartTs,
+          });
+          if (archive) {
+            // Preview chunk first, then archive announcement.
+            const preview = result.text.slice(0, PREVIEW_CHARS).trimEnd() + '\n\n…(以下省略)…';
+            for (const chunk of splitMessage(preview)) {
+              await sender.sendText(fromUserId, contextToken, chunk);
+            }
+            await sender.sendText(
+              fromUserId,
+              contextToken,
+              formatArchiveAnnouncement(archive, result.text.length),
+            );
+          } else {
+            // Archive failed (disk error etc.) — fall back to full inline send.
+            for (const chunk of splitMessage(result.text)) {
+              await sender.sendText(fromUserId, contextToken, chunk);
+            }
+          }
+        } else {
+          for (const chunk of splitMessage(result.text)) {
+            await sender.sendText(fromUserId, contextToken, chunk);
+          }
         }
       }
       recordQuerySuccess();
