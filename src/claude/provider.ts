@@ -295,6 +295,12 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
           }
           break;
         }
+        /**
+         * Dead code under current config (includePartialMessages: false) — the SDK
+         * never emits "stream_event" messages when that flag is off.  MAX_THINKING_PREVIEW,
+         * thinkingBuf, and thinkingCapped are deliberately kept here as a ready-made
+         * fallback for a future verbose/streaming mode.  Do NOT remove or dead-code-elim.
+         */
         case "stream_event": {
           const evt = (message as any).event;
           if (evt?.type === "content_block_start") {
