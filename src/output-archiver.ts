@@ -2,14 +2,15 @@
 // Long-output archiver — write big Claude replies to disk so WeChat doesn't
 // drown in 200-line code dumps.
 // ---------------------------------------------------------------------------
-// Why files (not native WeChat file send)?
-//   The ilink bot wire protocol supports FILE message items, but actually
-//   delivering one requires uploading bytes to WeChat's CDN with the right
-//   AES key + encryption layer — that's reverse-engineered territory and
-//   unstable across WeChat versions.
-//   File-on-disk has zero external deps, full local control, and pairs
-//   well with cloud sync folders (iCloud Drive / OneDrive / Dropbox / Syncthing)
-//   to reach the user's phone via the OS instead of via WeChat.
+// Why archive first, then sendFile?
+//   Archiving to disk is the reliable baseline: zero external deps, survives
+//   CDN hiccups, and produces a durable audit trail that pairs naturally with
+//   cloud-sync folders (iCloud Drive / OneDrive / Dropbox / Syncthing).
+//   sendFile() — implemented in src/wechat/send.ts — builds on top of the
+//   archive: it uploads the .md via getUploadUrl → AES-encrypt → PUT → WeChat
+//   file_item message, giving the user a clickable attachment in chat.
+//   If the CDN upload fails the caller falls back to a path announcement, so
+//   the local archive always guarantees the content is reachable.
 //
 // Storage layout:
 //   <DATA_DIR>/outputs/YYYY-MM-DD/HHMMSS-<8-hex>.md

@@ -72,6 +72,11 @@ interface DebounceEntry {
 // ---------------------------------------------------------------------------
 
 const MAX_MESSAGE_LENGTH = 2048;
+// Threshold above which a Claude reply is archived to disk + pushed as a
+// WeChat file attachment instead of being split across dozens of text messages.
+const LONG_OUTPUT_CHARS = 5000;
+// How many characters of the archived reply to preview inline before the file.
+const PREVIEW_CHARS = 1500;
 
 function splitMessage(text: string, maxLen: number = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= maxLen) return [text];
@@ -798,6 +803,12 @@ async function sendToClaude(
       // If aborted, drop any pending content silently — the next query takes over.
       if (abortedDuringQuery) { pendingBuffer = ''; return; }
       if (!pendingBuffer.trim()) return;
+      // Long-output gate: if buffered text exceeds LONG_OUTPUT_CHARS, skip the
+      // WeChat text send entirely so the post-query branch (gated on !anySent)
+      // can archive to disk and push a real file attachment via sender.sendFile.
+      // Without this gate, on-complete onText flushes the full reply as a barrage
+      // of split-text messages and the archive branch never fires.
+      if (pendingBuffer.length > LONG_OUTPUT_CHARS) return;
       const now = Date.now();
       if (!force && now - lastSendTime < SEND_INTERVAL_MS) return;
       const toSend = pendingBuffer.trim();
@@ -929,8 +940,6 @@ async function sendToClaude(
       // For very long outputs (> LONG_OUTPUT_CHARS), archive to a file and send a short
       // preview + path instead of dumping 5K+ chars across many WeChat messages.
       if (!anySent) {
-        const LONG_OUTPUT_CHARS = 5000;
-        const PREVIEW_CHARS = 1500;
         if (result.text.length > LONG_OUTPUT_CHARS) {
           const archive = archiveOutput(result.text, {
             model: result.usage?.model,
