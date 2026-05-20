@@ -207,7 +207,11 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     permissionMode,
     allowDangerouslySkipPermissions: permissionMode === 'bypassPermissions',
     settingSources: ["user", "project"],
-    includePartialMessages: !!onText,
+    // Final-reply-only mode: never enable partial messages. WeChat output is
+    // gated to "send only the final assistant text once the SDK query
+    // completes". This kills text_delta / thinking_delta streaming at the SDK
+    // layer, so the stream_event branch below becomes a no-op for those types.
+    includePartialMessages: false,
   };
 
   // Use the globally installed claude cli.js to avoid version mismatch with the bundled one
@@ -280,26 +284,14 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
       switch (message.type) {
         case "assistant": {
           const aMsg = message as SDKAssistantMessage;
-          const content = aMsg.message?.content;
-          // Extract tool_use blocks and notify onThinking
-          if (onThinking) {
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if ((block as any).type === "tool_use") {
-                  const summary = formatToolUse(
-                    (block as any).name ?? "Tool",
-                    (block as any).input ?? {},
-                  );
-                  await onThinking(summary);
-                }
-              }
-            }
-          }
-          // Accumulate text; only call onText if not already streaming via stream_event
+          // Final-reply-only mode: skip tool_use / thinking blocks entirely; only
+          // accumulate text blocks and forward them via onText. main.ts's
+          // pendingBuffer + final trySend(true) at query end produces a single
+          // WeChat message per query containing only the assistant's final words.
           const text = extractText(aMsg);
           if (text) {
             textParts.push(text);
-            if (onText && !sdkOptions.includePartialMessages) await onText(text);
+            if (onText) await onText(text);
           }
           break;
         }
