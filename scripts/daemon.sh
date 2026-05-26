@@ -55,7 +55,9 @@ load_persistent_env
 # =============================================================================
 
 macos_plist_label() {
-  echo "com.wechat-to-claude.bridge"
+  # Overridable so multiple isolated instances (each with its own WCC_DATA_DIR)
+  # can register distinct launchd labels instead of colliding on one.
+  echo "${WCC_SERVICE_LABEL:-com.wechat-to-claude.bridge}"
 }
 
 macos_plist_path() {
@@ -83,7 +85,7 @@ macos_start() {
 
   # Collect Anthropic/Claude env vars for plist
   local plist_extra_env=""
-  for var in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY https_proxy http_proxy all_proxy no_proxy; do
+  for var in WCC_DATA_DIR ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY https_proxy http_proxy all_proxy no_proxy; do
     if [ -n "${!var:-}" ]; then
       plist_extra_env="${plist_extra_env}    <key>${var}</key>
     <string>${!var}</string>
@@ -218,7 +220,7 @@ linux_create_service_file() {
 
   # Collect Anthropic/Claude env vars to pass through to the service
   local extra_env=""
-  for var in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY https_proxy http_proxy all_proxy no_proxy; do
+  for var in WCC_DATA_DIR ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY https_proxy http_proxy all_proxy no_proxy; do
     if [ -n "${!var:-}" ]; then
       extra_env="${extra_env}Environment=${var}=${!var}
 "
