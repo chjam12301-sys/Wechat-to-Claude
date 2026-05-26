@@ -284,14 +284,25 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
       switch (message.type) {
         case "assistant": {
           const aMsg = message as SDKAssistantMessage;
-          // Final-reply-only mode: skip tool_use / thinking blocks entirely; only
-          // accumulate text blocks and forward them via onText. main.ts's
-          // pendingBuffer + final trySend(true) at query end produces a single
-          // WeChat message per query containing only the assistant's final words.
+          // Final-reply-only mode keeps includePartialMessages off, so we never
+          // get token-level deltas. We still accumulate text blocks for the final
+          // reply via onText, AND surface each tool_use as a live progress ping
+          // via onThinking — that per-turn signal is the only "Claude is working"
+          // feedback the user gets while a multi-step query runs.
           const text = extractText(aMsg);
           if (text) {
             textParts.push(text);
             if (onText) await onText(text);
+          }
+          if (onThinking) {
+            const content = aMsg.message?.content;
+            if (Array.isArray(content)) {
+              for (const block of content as any[]) {
+                if (block?.type === "tool_use") {
+                  await onThinking(formatToolUse(block.name, block.input ?? {}));
+                }
+              }
+            }
           }
           break;
         }
