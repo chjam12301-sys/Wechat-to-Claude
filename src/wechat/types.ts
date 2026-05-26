@@ -92,6 +92,11 @@ export interface GetUpdatesReq {
 export interface GetUpdatesResp {
   ret?: number;
   retmsg?: string;
+  // The server actually returns errors under errcode/errmsg (e.g. -14
+  // "session timeout"); ret/retmsg above were never populated. Kept both so
+  // the monitor can normalize across either shape.
+  errcode?: number;
+  errmsg?: string;
   sync_buf: string;
   get_updates_buf: string;
   msgs?: WeixinMessage[];

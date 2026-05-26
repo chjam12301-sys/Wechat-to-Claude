@@ -30,7 +30,14 @@ export function createMonitor(api: WeChatApi, callbacks: MonitorCallbacks) {
 
         const resp = await api.getUpdates(buf || undefined);
 
-        if (resp.ret === SESSION_EXPIRED_ERRCODE) {
+        // The server signals errors under errcode/errmsg, but this code
+        // originally only read ret/retmsg (always undefined) — so -14 session
+        // timeout was never detected and the loop hammered the server with no
+        // backoff. Normalize across both shapes.
+        const errCode = resp.ret ?? resp.errcode;
+        const errMsg = resp.retmsg ?? resp.errmsg;
+
+        if (errCode === SESSION_EXPIRED_ERRCODE) {
           logger.warn('Session expired, pausing for 1 hour');
           callbacks.onSessionExpired();
           await sleep(SESSION_EXPIRED_PAUSE_MS, controller.signal);
@@ -38,8 +45,14 @@ export function createMonitor(api: WeChatApi, callbacks: MonitorCallbacks) {
           continue;
         }
 
-        if (resp.ret !== undefined && resp.ret !== 0) {
-          logger.warn('getUpdates returned error', { ret: resp.ret, retmsg: resp.retmsg });
+        if (errCode !== undefined && errCode !== 0) {
+          // Back off on ANY error response so a persistent server-side error
+          // can't turn into a tight retry storm.
+          consecutiveFailures++;
+          const backoff = consecutiveFailures >= BACKOFF_THRESHOLD ? BACKOFF_LONG_MS : BACKOFF_SHORT_MS;
+          logger.warn('getUpdates returned error, backing off', { ret: errCode, retmsg: errMsg, backoff, consecutiveFailures });
+          await sleep(backoff, controller.signal);
+          continue;
         }
 
         // Save the new sync buffer regardless of ret

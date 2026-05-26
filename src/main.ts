@@ -748,6 +748,13 @@ async function sendToClaude(
     abortedDuringQuery = true;
   });
 
+  // Feedback bookkeeping for the live-progress channel + delayed ack.
+  // anyFeedbackSent flips true once ANY status reaches the user (a tool-call
+  // progress ping, a streamed text flush, or the delayed ack itself), so the
+  // ack only fires when the query would otherwise be completely silent.
+  let anyFeedbackSent = false;
+  let ackTimer: ReturnType<typeof setTimeout> | undefined;
+
   // Record user message(s) in chat history. DEBOUNCE: when called from the
   // burst-buffer path, write one entry per original message; otherwise behave
   // as before (single entry).
@@ -817,9 +824,50 @@ async function sendToClaude(
       for (const chunk of chunks) {
         lastSendTime = Date.now();
         anySent = true;
+        anyFeedbackSent = true;
         await sender.sendText(fromUserId, contextToken, chunk);
       }
     }
+
+    // --- Live progress channel (tool-call status) ---
+    // Kept fully separate from pendingBuffer / anySent so it never interferes
+    // with final-answer delivery or the long-output archive path (both gated on
+    // anySent). These are ephemeral status pings, not part of the reply or
+    // chatHistory. lastProgressSend starts at 0 so the FIRST tool call flushes
+    // immediately; subsequent calls coalesce on a short interval to stay well
+    // under WeChat's send rate limit.
+    let progressBuffer = '';
+    let lastProgressSend = 0;
+    const PROGRESS_INTERVAL_MS = 5_000;
+
+    async function flushProgress(force = false): Promise<void> {
+      if (abortedDuringQuery) { progressBuffer = ''; return; }
+      if (!progressBuffer.trim()) return;
+      const now = Date.now();
+      if (!force && now - lastProgressSend < PROGRESS_INTERVAL_MS) return;
+      const toSend = progressBuffer.trim();
+      progressBuffer = '';
+      lastProgressSend = Date.now();
+      anyFeedbackSent = true;
+      try {
+        await sender.sendText(fromUserId, contextToken, toSend);
+      } catch (err) {
+        logger.warn('Failed to send progress update', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Delayed "still working" ack: fires once if NO feedback (progress or text)
+    // has reached the user after ACK_DELAY_MS. Fast queries finish first and
+    // stay silent; only genuinely slow / no-tool queries get the reassurance.
+    const ACK_DELAY_MS = 8_000;
+    ackTimer = setTimeout(() => {
+      if (abortedDuringQuery || anyFeedbackSent) return;
+      // If a permission prompt is already pending, the user has a prompt in
+      // hand — a "still working" ping would be redundant/misleading.
+      if (permissionBroker.pendingCount(account.accountId) > 0) return;
+      anyFeedbackSent = true;
+      void sender.sendText(fromUserId, contextToken, '⏳ 正在处理，请稍候…').catch(() => {});
+    }, ACK_DELAY_MS);
 
     const queryOptions: QueryOptions = {
       prompt: userText || '请分析这张图片',
@@ -835,8 +883,9 @@ async function sendToClaude(
         await trySend();
       },
       onThinking: async (summary: string) => {
-        pendingBuffer += (pendingBuffer ? '\n' : '') + summary;
-        await trySend();
+        // Tool-call progress → live status channel (not the reply buffer).
+        progressBuffer += (progressBuffer ? '\n' : '') + summary;
+        await flushProgress();
       },
       onPermissionRequest: isAutoPermission
         ? async () => true  // auto-approve all tools, skip broker
@@ -1038,6 +1087,7 @@ async function sendToClaude(
     session.state = 'idle';
     sessionStore.save(account.accountId, store);
   } finally {
+    if (ackTimer) clearTimeout(ackTimer);
     // Clean up the abort controller if it's still ours
     if (activeControllers.get(account.accountId) === abortController) {
       activeControllers.delete(account.accountId);
