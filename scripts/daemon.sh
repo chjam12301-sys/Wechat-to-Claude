@@ -77,6 +77,9 @@ macos_start() {
   fi
 
   mkdir -p "$DATA_DIR/logs"
+  # ~/Library/LaunchAgents may not exist on a clean macOS user; create it so the
+  # plist heredoc below doesn't fail with "No such file or directory".
+  mkdir -p "$(dirname "$plist_path")"
 
   # Collect Anthropic/Claude env vars for plist
   local plist_extra_env=""
